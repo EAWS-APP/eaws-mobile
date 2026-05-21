@@ -1,8 +1,10 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:geolocator/geolocator.dart';
 import 'package:lucide_icons/lucide_icons.dart';
 import '../../core/theme.dart';
+import 'sos_api.dart';
 
 class SOSScreen extends StatefulWidget {
   final bool startImmediately;
@@ -21,6 +23,7 @@ class _SOSScreenState extends State<SOSScreen> with TickerProviderStateMixin {
   bool _isCountingDown = false;
   int _countdownSeconds = 10;
   Timer? _countdownTimer;
+  String? _activeIncidentId;
 
   // Radar pulsing animation
   late AnimationController _radarController;
@@ -92,13 +95,23 @@ class _SOSScreenState extends State<SOSScreen> with TickerProviderStateMixin {
     });
   }
 
-  void _cancelSOS() {
+  Future<void> _cancelSOS() async {
     _countdownTimer?.cancel();
     _flashController.stop();
+    final incidentId = _activeIncidentId;
     setState(() {
       _isCountingDown = false;
       _isSOSActive = false;
+      _activeIncidentId = null;
     });
+
+    if (incidentId != null) {
+      try {
+        await SosApi.instance.cancelSos(incidentId);
+      } catch (e) {
+        print('EAWS SOS cancel API unavailable: $e');
+      }
+    }
     
     ScaffoldMessenger.of(context).showSnackBar(
       const SnackBar(
@@ -108,7 +121,7 @@ class _SOSScreenState extends State<SOSScreen> with TickerProviderStateMixin {
     );
   }
 
-  void _activateSOSBroadcast() {
+  Future<void> _activateSOSBroadcast() async {
     HapticFeedback.vibrate();
     setState(() {
       _isCountingDown = false;
@@ -117,6 +130,24 @@ class _SOSScreenState extends State<SOSScreen> with TickerProviderStateMixin {
     
     // Repeat the red flashing beacon light animation
     _flashController.repeat(reverse: true);
+
+    try {
+      final position = await Geolocator.getCurrentPosition(
+        desiredAccuracy: LocationAccuracy.high,
+        timeLimit: const Duration(seconds: 6),
+      );
+      final sos = await SosApi.instance.createSos(
+        latitude: position.latitude,
+        longitude: position.longitude,
+        accuracy: position.accuracy,
+        locationName: '${position.latitude.toStringAsFixed(5)}, ${position.longitude.toStringAsFixed(5)}',
+      );
+      setState(() {
+        _activeIncidentId = sos['id']?.toString() ?? sos['incident_id']?.toString();
+      });
+    } catch (e) {
+      print('EAWS SOS API unavailable, active visual state retained: $e');
+    }
   }
 
   void _stopSOS() {
@@ -124,6 +155,7 @@ class _SOSScreenState extends State<SOSScreen> with TickerProviderStateMixin {
     setState(() {
       _isSOSActive = false;
       _isCountingDown = false;
+      _activeIncidentId = null;
     });
     
     ScaffoldMessenger.of(context).showSnackBar(
@@ -373,7 +405,7 @@ class _SOSScreenState extends State<SOSScreen> with TickerProviderStateMixin {
                 SizedBox(
                   width: double.infinity,
                   child: ElevatedButton(
-                    onPressed: _cancelSOS,
+                    onPressed: () => _cancelSOS(),
                     style: ElevatedButton.styleFrom(
                       backgroundColor: Colors.white,
                       foregroundColor: AppTheme.textPrimary,

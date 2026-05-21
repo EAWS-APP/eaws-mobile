@@ -7,6 +7,7 @@ import 'report_incident_screen.dart';
 import 'incident_detail_screen.dart';
 import 'my_reports_screen.dart';
 import 'reactions_comments_screen.dart';
+import 'incident_api.dart';
 
 // Shared in-memory list of reports to support real-time dynamic posting during runtime
 final ValueNotifier<List<Map<String, dynamic>>> communityReportsNotifier = ValueNotifier<List<Map<String, dynamic>>>([
@@ -84,6 +85,28 @@ class _CommunityFeedScreenState extends State<CommunityFeedScreen> {
   double _distanceFromMe = 15.0;
   String _timeRange = 'All Time';
   String _sortBy = 'Most Recent';
+
+  @override
+  void initState() {
+    super.initState();
+    _loadIncidentFeed();
+  }
+
+  Future<void> _loadIncidentFeed() async {
+    try {
+      final incidents = await IncidentApi.instance.getFeed(
+        category: _selectedCategory,
+        distanceKm: _distanceFromMe,
+        timeRange: _timeRange,
+        sort: _sortBy,
+      );
+      if (incidents.isNotEmpty) {
+        communityReportsNotifier.value = incidents.map((incident) => incident.toUiMap()).toList();
+      }
+    } catch (e) {
+      print('EAWS Feed API unavailable, keeping local mock feed: $e');
+    }
+  }
 
   @override
   Widget build(BuildContext context) {

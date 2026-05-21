@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:lucide_icons/lucide_icons.dart';
 import '../../core/theme.dart';
+import 'incident_api.dart';
 import 'community_feed_screen.dart';
 
 class ReactionsCommentsScreen extends StatefulWidget {
@@ -90,7 +91,7 @@ class _ReactionsCommentsScreenState extends State<ReactionsCommentsScreen> {
     super.dispose();
   }
 
-  void _handleSendComment() {
+  Future<void> _handleSendComment() async {
     final text = _commentController.text.trim();
     if (text.isEmpty) return;
 
@@ -119,6 +120,12 @@ class _ReactionsCommentsScreenState extends State<ReactionsCommentsScreen> {
     _commentController.clear();
     widget.onUpdate(_localReport);
 
+    try {
+      await IncidentApi.instance.addComment(_localReport['id'].toString(), text);
+    } catch (e) {
+      print('EAWS Comment API unavailable, keeping local comment: $e');
+    }
+
     // Auto-scroll to the bottom comment card
     Future.delayed(const Duration(milliseconds: 150), () {
       if (_scrollController.hasClients) {
@@ -131,7 +138,7 @@ class _ReactionsCommentsScreenState extends State<ReactionsCommentsScreen> {
     });
   }
 
-  void _toggleReaction(String type) {
+  Future<void> _toggleReaction(String type) async {
     HapticFeedback.mediumImpact();
     setState(() {
       if (type == 'like') {
@@ -155,6 +162,12 @@ class _ReactionsCommentsScreenState extends State<ReactionsCommentsScreen> {
       }
     });
     widget.onUpdate(_localReport);
+
+    try {
+      await IncidentApi.instance.react(_localReport['id'].toString(), type);
+    } catch (e) {
+      print('EAWS Reaction API unavailable, keeping local reaction: $e');
+    }
   }
 
   void _toggleCommentLike(int commentId) {

@@ -8,6 +8,7 @@ import 'package:image_picker/image_picker.dart';
 import 'package:device_info_plus/device_info_plus.dart';
 import '../../core/theme.dart';
 import 'community_feed_screen.dart';
+import 'incident_api.dart';
 
 class ReportIncidentScreen extends StatefulWidget {
   const ReportIncidentScreen({super.key});
@@ -370,7 +371,7 @@ class _ReportIncidentScreenState extends State<ReportIncidentScreen> {
     }
   }
 
-  void _handleSubmitReport() {
+  Future<void> _handleSubmitReport() async {
     final String desc = _descriptionController.text.trim();
     if (desc.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -422,28 +423,50 @@ class _ReportIncidentScreenState extends State<ReportIncidentScreen> {
       }
     }
 
-    // Build the dynamic new card model
-    final newReport = {
-      'id': DateTime.now().millisecondsSinceEpoch,
-      'userId': 'user_12345', // Pseudo-anonymity: always sent to backend for EAWS tracking
-      'userName': _isAnonymous ? 'Anonymous Citizen' : 'Ghana Citizen',
-      'initials': _isAnonymous ? 'AC' : 'GC',
-      'avatarColor': _isAnonymous ? Colors.grey : AppTheme.primaryColor,
-      'isVerified': !_isAnonymous,
-      'timeAgo': 'Just now',
-      'category': catLabel,
-      'categoryColor': catColor,
-      'title': '$_selectedIncidentType incident reported near $_locationName',
-      'description': desc,
-      'imageAsset': finalImageAsset,
-      'isVideo': isVideoReport,
-      'severity': 'PENDING TRIAGE', // Decided by Control Team
-      'location': _locationName,
-      'likes': 0,
-      'commentsCount': 0,
-      'comments': <Map<String, dynamic>>[],
-      'isLiked': false,
-    };
+    final title = '$_selectedIncidentType incident reported near $_locationName';
+    Map<String, dynamic> newReport;
+
+    try {
+      final remoteIncident = await IncidentApi.instance.createIncident(
+        category: catLabel,
+        title: title,
+        description: desc,
+        isAnonymous: _isAnonymous,
+        locationName: _locationName,
+        latitude: _latitude,
+        longitude: _longitude,
+        mediaUrl: finalImageAsset != null && finalImageAsset.startsWith('http') ? finalImageAsset : null,
+        mediaType: finalImageAsset == null ? null : (isVideoReport ? 'video' : 'image'),
+      );
+      newReport = remoteIncident.toUiMap();
+    } catch (e) {
+      print('EAWS Incident API submit failed, using local fallback: $e');
+      // Build the dynamic new card model while the backend route is still coming online.
+      newReport = {
+        'id': DateTime.now().millisecondsSinceEpoch,
+        'userId': 'user_12345',
+        'userName': _isAnonymous ? 'Anonymous Citizen' : 'Ghana Citizen',
+        'initials': _isAnonymous ? 'AC' : 'GC',
+        'avatarColor': _isAnonymous ? Colors.grey : AppTheme.primaryColor,
+        'isVerified': !_isAnonymous,
+        'timeAgo': 'Just now',
+        'category': catLabel,
+        'categoryColor': catColor,
+        'title': title,
+        'description': desc,
+        'imageAsset': finalImageAsset,
+        'isVideo': isVideoReport,
+        'severity': 'PENDING TRIAGE',
+        'status': 'ACTIVE',
+        'location': _locationName,
+        'latitude': _latitude,
+        'longitude': _longitude,
+        'likes': 0,
+        'commentsCount': 0,
+        'comments': <Map<String, dynamic>>[],
+        'isLiked': false,
+      };
+    }
 
     // Prepend to dynamic list
     final List<Map<String, dynamic>> currentReports = List.from(communityReportsNotifier.value);
