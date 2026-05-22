@@ -27,6 +27,7 @@ migrate_working_dir/
 **/doc/api/
 **/ios/Flutter/.last_build_id
 .dart_tool/
+.flutter-plugins
 .flutter-plugins-dependencies
 .pub-cache/
 .pub/
@@ -43,3 +44,17 @@ app.*.map.json
 /android/app/debug
 /android/app/profile
 /android/app/release
+
+# Flutter SDK (do NOT track the SDK itself inside the project)
+/flutter/
+
+# Nested sub-projects (each has its own repo)
+/eaws_app/
+/eaws-backend/
+/citizen_app/
+
+# Root-level build artifacts
+/build/
+
+# Debug screenshots saved during development
+screenshot*.png
