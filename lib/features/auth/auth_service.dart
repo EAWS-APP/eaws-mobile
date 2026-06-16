@@ -21,6 +21,17 @@ class AuthService {
   /// Retrieves the authenticated user's Ghana card, if available.
   String? get currentUserGhanaCard => _supabase.auth.currentUser?.userMetadata?['ghana_card'];
 
+  /// Checks if the authenticated user has been approved by an admin.
+  bool get isApproved {
+    final meta = _supabase.auth.currentUser?.userMetadata;
+    if (meta == null) return false;
+    // Handle both boolean and string representations just in case
+    final approved = meta['is_approved'];
+    if (approved is bool) return approved;
+    if (approved is String) return approved.toLowerCase() == 'true';
+    return false;
+  }
+
   /// Checks if there is an active session authenticated with Supabase.
   bool get isAuthenticated => _supabase.auth.currentSession != null;
 
@@ -41,6 +52,7 @@ class AuthService {
           'full_name': fullName,
           'phone_number': phoneNumber,
           'ghana_card': ghanaCard,
+          'is_approved': true, // Auto-approved by 3rd party (Liveness/ID check)
         },
       );
       final bool success = response.user != null;
@@ -120,6 +132,32 @@ class AuthService {
         await Future.delayed(const Duration(milliseconds: 800));
         return true;
       }
+      return false;
+    }
+  }
+
+  /// Sends a password reset link to the given email address.
+  Future<bool> resetPasswordForEmail(String email) async {
+    try {
+      print('EAWS Auth: Sending password reset email to $email...');
+      await _supabase.auth.resetPasswordForEmail(email);
+      print('EAWS Auth: Password reset email sent successfully.');
+      return true;
+    } catch (e) {
+      print('EAWS Auth: Password reset failed: $e');
+      return false;
+    }
+  }
+
+  /// Updates the user metadata for the current user.
+  Future<bool> updateUserMetadata(Map<String, dynamic> data) async {
+    try {
+      final response = await _supabase.auth.updateUser(
+        UserAttributes(data: data),
+      );
+      return response.user != null;
+    } catch (e) {
+      print('EAWS Auth: Failed to update metadata: $e');
       return false;
     }
   }

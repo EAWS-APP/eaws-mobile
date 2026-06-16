@@ -5,6 +5,7 @@ import '../../core/theme.dart';
 import '../home/home_screen.dart';
 import '../feed/community_feed_screen.dart';
 import '../sos/media_uploads_screen.dart';
+import '../sos/sos_screen.dart';
 import '../profile/profile_screen.dart';
 
 class DashboardScreen extends StatefulWidget {
@@ -16,11 +17,11 @@ class DashboardScreen extends StatefulWidget {
 
 class _DashboardScreenState extends State<DashboardScreen> {
   int _currentIndex = 0;
-  
+
   final List<Widget> _screens = [
     const HomeScreen(),
     const CommunityFeedScreen(),
-    const MediaUploadsScreen(),
+    const SOSScreen(),
     const ProfileScreen(),
   ];
 
@@ -28,35 +29,63 @@ class _DashboardScreenState extends State<DashboardScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       body: _screens[_currentIndex],
-      bottomNavigationBar: Container(
-        padding: const EdgeInsets.symmetric(vertical: 12),
-        decoration: BoxDecoration(
-          color: Colors.white,
-          boxShadow: [
-            BoxShadow(
-              color: Colors.black.withOpacity(0.06),
-              blurRadius: 16,
-              offset: const Offset(0, -4),
+      bottomNavigationBar: ValueListenableBuilder<bool>(
+        valueListenable: globalSosActiveNotifier,
+        builder: (context, isSosActive, child) {
+          if (isSosActive) return const SizedBox.shrink();
+          return Container(
+            padding: const EdgeInsets.symmetric(vertical: 12),
+            decoration: BoxDecoration(
+              color: Colors.white,
+              boxShadow: [
+                BoxShadow(
+                  color: Colors.black.withOpacity(0.06),
+                  blurRadius: 16,
+                  offset: const Offset(0, -4),
+                ),
+              ],
             ),
-          ],
-        ),
-        child: SafeArea(
-          top: false,
-          child: Row(
-            mainAxisAlignment: MainAxisAlignment.spaceAround,
-            children: [
-              _buildNavItem(0, LucideIcons.home, LucideIcons.home, 'Home'),
-              _buildNavItem(1, LucideIcons.newspaper, LucideIcons.newspaper, 'Feed'),
-              _buildNavItem(2, LucideIcons.alertTriangle, LucideIcons.alertTriangle, 'SOS', isCircular: true),
-              _buildNavItem(3, LucideIcons.user, LucideIcons.user, 'Profile'),
-            ],
-          ),
-        ),
+            child: SafeArea(
+              top: false,
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.spaceAround,
+                children: [
+                  _buildNavItem(0, LucideIcons.home, LucideIcons.home, 'Home'),
+                  _buildNavItem(
+                    1,
+                    LucideIcons.newspaper,
+                    LucideIcons.newspaper,
+                    'Feed',
+                  ),
+                  _buildNavItem(
+                    2,
+                    LucideIcons.alertTriangle,
+                    LucideIcons.alertTriangle,
+                    'SOS',
+                    isCircular: true,
+                  ),
+                  _buildNavItem(
+                    3,
+                    LucideIcons.user,
+                    LucideIcons.user,
+                    'Profile',
+                  ),
+                ],
+              ),
+            ),
+          );
+        },
       ),
     );
   }
 
-  Widget _buildNavItem(int index, IconData activeIcon, IconData inactiveIcon, String label, {bool isCircular = false}) {
+  Widget _buildNavItem(
+    int index,
+    IconData activeIcon,
+    IconData inactiveIcon,
+    String label, {
+    bool isCircular = false,
+  }) {
     final isSelected = _currentIndex == index;
     return GestureDetector(
       behavior: HitTestBehavior.opaque,
@@ -73,7 +102,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
             duration: const Duration(milliseconds: 200),
             curve: Curves.easeInOut,
             padding: EdgeInsets.symmetric(
-              horizontal: isCircular ? 14 : 18, 
+              horizontal: isCircular ? 14 : 18,
               vertical: 8,
             ),
             decoration: BoxDecoration(
@@ -90,7 +119,9 @@ class _DashboardScreenState extends State<DashboardScreen> {
           Text(
             label,
             style: TextStyle(
-              color: isSelected ? AppTheme.primaryColor : AppTheme.textSecondary,
+              color: isSelected
+                  ? AppTheme.primaryColor
+                  : AppTheme.textSecondary,
               fontWeight: isSelected ? FontWeight.bold : FontWeight.w600,
               fontSize: 11,
             ),

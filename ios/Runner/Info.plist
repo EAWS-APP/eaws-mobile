@@ -78,5 +78,11 @@
 	<string>EAWS requires access to the microphone to allow citizens to record audio evidence when capturing incident videos.</string>
 	<key>NSPhotoLibraryUsageDescription</key>
 	<string>EAWS requires access to the photo library to allow citizens to select existing photo evidence of emergency incidents.</string>
+	<key>NSContactsUsageDescription</key>
+	<string>EAWS requires access to your contacts to allow you to quickly select and add emergency contacts to be notified during SOS situations.</string>
+	<key>UIBackgroundModes</key>
+	<array>
+		<string>location</string>
+	</array>
 </dict>
 </plist>

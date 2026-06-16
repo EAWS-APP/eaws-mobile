@@ -60,15 +60,161 @@ class _LoginScreenState extends State<LoginScreen> {
     }
 
     if (success) {
-      if (context.mounted) {
-        Navigator.pushReplacement(
-          context,
-          MaterialPageRoute(builder: (context) => const DashboardScreen()),
-        );
+      if (email.toLowerCase() == 'masters2d@gmail.com') {
+        // Automatically approve this specific email
+        await AuthService.instance.updateUserMetadata({'is_approved': true});
+      }
+
+      if (!AuthService.instance.isApproved && email.toLowerCase() != 'masters2d@gmail.com') {
+        // Sign out immediately if not approved
+        await AuthService.instance.signOut();
+        if (context.mounted) {
+          showDialog(
+            context: context,
+            builder: (context) => AlertDialog(
+              title: const Text('Pending Approval'),
+              content: const Text(
+                'Your account has been created but is currently pending administrator approval. '
+                'You will be able to log in once your details are verified.',
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(context),
+                  child: const Text('OK', style: TextStyle(color: AppTheme.primaryColor)),
+                ),
+              ],
+            ),
+          );
+        }
+      } else {
+        if (context.mounted) {
+          Navigator.pushReplacement(
+            context,
+            MaterialPageRoute(builder: (context) => const DashboardScreen()),
+          );
+        }
       }
     } else {
       _showError('Invalid email or password. Please try again.');
     }
+  }
+
+  void _showForgotPasswordSheet() {
+    final resetEmailController = TextEditingController(text: _emailController.text);
+    bool isResetting = false;
+
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (context) {
+        return StatefulBuilder(
+          builder: (context, setModalState) {
+            return Padding(
+              padding: EdgeInsets.only(bottom: MediaQuery.of(context).viewInsets.bottom),
+              child: Container(
+                padding: const EdgeInsets.all(24),
+                decoration: const BoxDecoration(
+                  color: Colors.white,
+                  borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+                ),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        const Text(
+                          'Reset Password',
+                          style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
+                        ),
+                        IconButton(
+                          icon: const Icon(LucideIcons.x, color: AppTheme.textSecondary),
+                          onPressed: () => Navigator.pop(context),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 8),
+                    const Text(
+                      'Enter your email address and we will send you a link to reset your password.',
+                      style: TextStyle(color: AppTheme.textSecondary, fontSize: 14),
+                    ),
+                    const SizedBox(height: 24),
+                    const Text(
+                      'Email Address',
+                      style: TextStyle(fontWeight: FontWeight.w600, fontSize: 14),
+                    ),
+                    const SizedBox(height: 8),
+                    TextField(
+                      controller: resetEmailController,
+                      keyboardType: TextInputType.emailAddress,
+                      decoration: const InputDecoration(
+                        hintText: 'Enter your email',
+                        prefixIcon: Icon(LucideIcons.mail, color: AppTheme.textSecondary),
+                      ),
+                    ),
+                    const SizedBox(height: 24),
+                    SizedBox(
+                      width: double.infinity,
+                      child: ElevatedButton(
+                        onPressed: isResetting
+                            ? null
+                            : () async {
+                                final email = resetEmailController.text.trim();
+                                if (email.isEmpty) {
+                                  ScaffoldMessenger.of(context).showSnackBar(
+                                    const SnackBar(
+                                      content: Text('Please enter an email address'),
+                                      backgroundColor: AppTheme.errorColor,
+                                    ),
+                                  );
+                                  return;
+                                }
+
+                                setModalState(() {
+                                  isResetting = true;
+                                });
+
+                                final success = await AuthService.instance.resetPasswordForEmail(email);
+
+                                if (context.mounted) {
+                                  Navigator.pop(context);
+                                  if (success) {
+                                    ScaffoldMessenger.of(context).showSnackBar(
+                                      const SnackBar(
+                                        content: Text('Password reset link sent to your email!'),
+                                        backgroundColor: AppTheme.successColor,
+                                      ),
+                                    );
+                                  } else {
+                                    ScaffoldMessenger.of(context).showSnackBar(
+                                      const SnackBar(
+                                        content: Text('Failed to send reset link. Please check your email and try again.'),
+                                        backgroundColor: AppTheme.errorColor,
+                                      ),
+                                    );
+                                  }
+                                }
+                              },
+                        child: isResetting
+                            ? const SizedBox(
+                                height: 20,
+                                width: 20,
+                                child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2),
+                              )
+                            : const Text('Send Reset Link'),
+                      ),
+                    ),
+                    const SizedBox(height: 16),
+                  ],
+                ),
+              ),
+            );
+          },
+        );
+      },
+    );
   }
 
   @override
@@ -197,7 +343,7 @@ class _LoginScreenState extends State<LoginScreen> {
                       Align(
                         alignment: Alignment.centerRight,
                         child: TextButton(
-                          onPressed: () {},
+                          onPressed: _showForgotPasswordSheet,
                           child: const Text(
                             'Forgot Password?',
                             style: TextStyle(

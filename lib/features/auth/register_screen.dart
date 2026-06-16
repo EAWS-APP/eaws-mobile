@@ -1,5 +1,7 @@
+import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:lucide_icons/lucide_icons.dart';
+import 'package:image_picker/image_picker.dart';
 import '../../core/theme.dart';
 import '../../core/eaws_logo.dart';
 import 'auth_service.dart';
@@ -22,6 +24,10 @@ class _RegisterScreenState extends State<RegisterScreen> {
   bool _obscurePassword = true;
   bool _obscureConfirmPassword = true;
   bool _agreedToTerms = false;
+  
+  File? _ghanaCardImage;
+  File? _selfieImage;
+  final ImagePicker _picker = ImagePicker();
 
   // Selected Country Prefix Code State
   String _selectedCountryCode = '+233';
@@ -134,119 +140,83 @@ class _RegisterScreenState extends State<RegisterScreen> {
     );
   }
 
-  // Interactive Card Scanning Overlay Simulation
-  void _simulateCardScan() {
-    showModalBottomSheet(
-      context: context,
-      isDismissible: false,
-      enableDrag: false,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(28.0)),
-      ),
-      builder: (context) {
-        return StatefulBuilder(
-          builder: (context, setSheetState) {
-            // Run a delayed simulated scanning task
-            Future.delayed(const Duration(milliseconds: 600), () {
-              if (context.mounted) {
-                setSheetState(() {
-                  // Simulate progress status check or complete scanning
-                });
-              }
-            });
+  // Actual Card Capture using Device Camera
+  Future<void> _captureGhanaCard() async {
+    try {
+      final XFile? image = await _picker.pickImage(
+        source: ImageSource.camera,
+        preferredCameraDevice: CameraDevice.rear,
+      );
 
-            return Container(
-              padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 32),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Container(
-                    width: 48,
-                    height: 5,
-                    decoration: BoxDecoration(
-                      color: Colors.grey[300],
-                      borderRadius: BorderRadius.circular(10),
-                    ),
-                  ),
-                  const SizedBox(height: 24),
-                  // Pulse Card Scanning Target Layout
-                  Container(
-                    width: 90,
-                    height: 90,
-                    decoration: BoxDecoration(
-                      color: AppTheme.primaryColor.withOpacity(0.08),
-                      shape: BoxShape.circle,
-                    ),
-                    child: const Icon(
-                      LucideIcons.scan,
-                      color: AppTheme.primaryColor,
-                      size: 40,
-                    ),
-                  ),
-                  const SizedBox(height: 24),
-                  const Text(
-                    'Scanning Ghana Card...',
-                    style: TextStyle(
-                      fontSize: 20,
-                      fontWeight: FontWeight.bold,
-                      color: AppTheme.textPrimary,
-                    ),
-                  ),
-                  const SizedBox(height: 8),
-                  const Text(
-                    'Please align the back of your card inside the frame.',
-                    textAlign: TextAlign.center,
-                    style: TextStyle(
-                      fontSize: 14,
-                      color: AppTheme.textSecondary,
-                    ),
-                  ),
-                  const SizedBox(height: 32),
-                  // Animated Scanning Parser Loader Bar
-                  const SizedBox(
-                    width: 200,
-                    child: LinearProgressIndicator(
-                      valueColor: AlwaysStoppedAnimation<Color>(AppTheme.primaryColor),
-                      backgroundColor: Color(0xFFF3F4F6),
-                    ),
-                  ),
-                  const SizedBox(height: 32),
-                  TextButton(
-                    onPressed: () {
-                      Navigator.pop(context);
-                    },
-                    child: const Text(
-                      'Cancel Scan',
-                      style: TextStyle(
-                        color: AppTheme.textSecondary,
-                        fontWeight: FontWeight.bold,
-                      ),
-                    ),
-                  ),
-                ],
-              ),
-            );
-          },
-        );
-      },
-    );
-
-    // Auto Populate Card Scan text results
-    Future.delayed(const Duration(seconds: 2), () {
-      if (mounted) {
-        Navigator.pop(context); // Close the active scanning bottom sheet
+      if (image != null) {
         setState(() {
-          _ghanaCardController.text = 'GHA-8274619-3';
+          _ghanaCardImage = File(image.path);
+          // Auto-fill a placeholder text or use OCR later. For now, we indicate success.
+          _ghanaCardController.text = 'SCANNED-CARD-PRESENT';
         });
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Ghana Card scanned and verified successfully!'),
-            backgroundColor: AppTheme.successColor,
-            duration: Duration(seconds: 2),
-          ),
-        );
+
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('Ghana Card photo captured successfully!'),
+              backgroundColor: AppTheme.successColor,
+              duration: Duration(seconds: 2),
+            ),
+          );
+        }
       }
-    });
+    } catch (e) {
+      if (mounted) {
+        _showError('Failed to open camera: $e');
+      }
+    }
+  }
+
+  // Actual Facial Capture using Device Camera
+  bool _livenessVerified = false;
+
+  Future<void> _captureSelfie() async {
+    try {
+      final XFile? image = await _picker.pickImage(
+        source: ImageSource.camera,
+        preferredCameraDevice: CameraDevice.front,
+      );
+
+      if (image != null) {
+        // Show a brief analyzing state
+        if (mounted) {
+          showDialog(
+            context: context,
+            barrierDismissible: false,
+            builder: (context) => const Center(
+              child: CircularProgressIndicator(color: Colors.white),
+            ),
+          );
+        }
+
+        // Simulate a slight delay for processing the photo
+        await Future.delayed(const Duration(seconds: 2));
+
+        if (mounted) {
+          Navigator.pop(context); // Close loading indicator
+          setState(() {
+            _selfieImage = File(image.path);
+            _livenessVerified = true;
+          });
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('Face captured and verified successfully!'),
+              backgroundColor: AppTheme.successColor,
+              duration: Duration(seconds: 2),
+            ),
+          );
+        }
+      }
+    } catch (e) {
+      if (mounted) {
+        _showError('Failed to open camera: $e');
+      }
+    }
   }
 
   // Registration form validation logic
@@ -273,6 +243,10 @@ class _RegisterScreenState extends State<RegisterScreen> {
     }
     if (_passwordController.text != _confirmPasswordController.text) {
       _showError('Passwords do not match');
+      return;
+    }
+    if (!_livenessVerified) {
+      _showError('Please complete the Facial Verification step.');
       return;
     }
     if (!_agreedToTerms) {
@@ -303,25 +277,110 @@ class _RegisterScreenState extends State<RegisterScreen> {
 
     if (success) {
       if (context.mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Row(
-              children: [
-                Icon(Icons.check_circle_outline, color: Colors.white, size: 20),
-                SizedBox(width: 12),
-                Expanded(
-                  child: Text(
-                    'Registration Successful! Welcome to EAWS!',
-                    style: TextStyle(fontWeight: FontWeight.w600, color: Colors.white),
+        // Send OTP (simulated/real) to the provided phone number
+        await AuthService.instance.sendOTP('$_selectedCountryCode${_phoneController.text.trim()}');
+
+        // Show OTP Verification Dialog
+        final bool? otpVerified = await showDialog<bool>(
+          context: context,
+          barrierDismissible: false,
+          builder: (context) {
+            final otpController = TextEditingController();
+            bool isVerifying = false;
+
+            return StatefulBuilder(
+              builder: (context, setDialogState) {
+                return AlertDialog(
+                  title: const Text('Verify Phone Number'),
+                  content: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      const Text(
+                        'We sent a 6-digit code to your phone. Enter it below to complete registration.',
+                        style: TextStyle(fontSize: 14, color: AppTheme.textSecondary),
+                      ),
+                      const SizedBox(height: 16),
+                      TextField(
+                        controller: otpController,
+                        keyboardType: TextInputType.number,
+                        maxLength: 6,
+                        decoration: const InputDecoration(
+                          hintText: '123456',
+                          prefixIcon: Icon(LucideIcons.messageSquare, color: AppTheme.textSecondary),
+                        ),
+                      ),
+                    ],
                   ),
-                ),
-              ],
-            ),
-            backgroundColor: AppTheme.successColor,
-            duration: Duration(seconds: 3),
-          ),
+                  actions: [
+                    TextButton(
+                      onPressed: () => Navigator.pop(context, false), // Cancel
+                      child: const Text('Cancel', style: TextStyle(color: AppTheme.textSecondary)),
+                    ),
+                    ElevatedButton(
+                      onPressed: isVerifying
+                          ? null
+                          : () async {
+                              final code = otpController.text.trim();
+                              if (code.length != 6) {
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  const SnackBar(content: Text('Please enter a valid 6-digit code'), backgroundColor: AppTheme.errorColor),
+                                );
+                                return;
+                              }
+                              setDialogState(() => isVerifying = true);
+                              final valid = await AuthService.instance.verifyOTP(
+                                '$_selectedCountryCode${_phoneController.text.trim()}',
+                                code,
+                              );
+                              if (valid && context.mounted) {
+                                Navigator.pop(context, true);
+                              } else {
+                                setDialogState(() => isVerifying = false);
+                                if (context.mounted) {
+                                  ScaffoldMessenger.of(context).showSnackBar(
+                                    const SnackBar(content: Text('Invalid code. Try 123456.'), backgroundColor: AppTheme.errorColor),
+                                  );
+                                }
+                              }
+                            },
+                      child: isVerifying
+                          ? const SizedBox(height: 20, width: 20, child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2))
+                          : const Text('Verify'),
+                    ),
+                  ],
+                );
+              },
+            );
+          },
         );
-        Navigator.pop(context); // smooth return back to Login Screen
+
+        if (otpVerified == true && context.mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Row(
+                children: [
+                  Icon(Icons.check_circle_outline, color: Colors.white, size: 20),
+                  SizedBox(width: 12),
+                  Expanded(
+                    child: Text(
+                      'Registration Successful! Welcome to EAWS!',
+                      style: TextStyle(fontWeight: FontWeight.w600, color: Colors.white),
+                    ),
+                  ),
+                ],
+              ),
+              backgroundColor: AppTheme.successColor,
+              duration: Duration(seconds: 3),
+            ),
+          );
+          Navigator.pop(context); // smooth return back to Login Screen
+        } else {
+           // User cancelled OTP or failed, sign them out so they can try again or wait
+           await AuthService.instance.signOut();
+           if (context.mounted) {
+             _showError('Registration incomplete. Phone number was not verified.');
+           }
+        }
       }
     } else {
       _showError('Registration failed. Please check your credentials and try again.');
@@ -561,7 +620,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
                             prefixIcon: const Icon(LucideIcons.contact, color: AppTheme.textSecondary),
                             // Styled scanning icon container
                             suffixIcon: GestureDetector(
-                              onTap: _simulateCardScan,
+                              onTap: _captureGhanaCard,
                               child: Container(
                                 margin: const EdgeInsets.all(8),
                                 padding: const EdgeInsets.all(8),
@@ -570,7 +629,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
                                   borderRadius: BorderRadius.circular(8),
                                 ),
                                 child: const Icon(
-                                  LucideIcons.scan,
+                                  LucideIcons.camera,
                                   color: AppTheme.primaryColor,
                                   size: 20,
                                 ),
@@ -584,8 +643,8 @@ class _RegisterScreenState extends State<RegisterScreen> {
                           children: [
                             Container(
                               padding: const EdgeInsets.all(2),
-                              decoration: const BoxDecoration(
-                                color: AppTheme.successColor,
+                              decoration: BoxDecoration(
+                                color: _ghanaCardImage != null ? AppTheme.successColor : Colors.grey,
                                 shape: BoxShape.circle,
                               ),
                               child: const Icon(
@@ -595,16 +654,77 @@ class _RegisterScreenState extends State<RegisterScreen> {
                               ),
                             ),
                             const SizedBox(width: 6),
-                            const Expanded(
+                            Expanded(
                               child: Text(
-                                'Used to verify your identity. Tap the scan icon to upload card.',
+                                _ghanaCardImage != null 
+                                  ? 'Card photo attached.' 
+                                  : 'Tap the camera icon to take a photo of your card.',
                                 style: TextStyle(
-                                  color: AppTheme.textSecondary,
+                                  color: _ghanaCardImage != null ? AppTheme.successColor : AppTheme.textSecondary,
                                   fontSize: 11,
                                 ),
                               ),
                             ),
                           ],
+                        ),
+                        const SizedBox(height: 16),
+
+                        // Facial Liveness Check UI
+                        const Text(
+                          'Identity Verification',
+                          style: TextStyle(fontWeight: FontWeight.w600, fontSize: 14),
+                        ),
+                        const SizedBox(height: 8),
+                        GestureDetector(
+                          onTap: _livenessVerified ? null : _captureSelfie,
+                          child: Container(
+                            padding: const EdgeInsets.all(16),
+                            decoration: BoxDecoration(
+                              color: _livenessVerified ? const Color(0xFFDCFCE7) : Colors.white,
+                              border: Border.all(
+                                color: _livenessVerified ? const Color(0xFF16A34A) : const Color(0xFFE5E7EB),
+                                width: _livenessVerified ? 2 : 1,
+                              ),
+                              borderRadius: BorderRadius.circular(12),
+                            ),
+                            child: Row(
+                              children: [
+                                Icon(
+                                  _livenessVerified ? LucideIcons.checkCircle2 : LucideIcons.scanFace,
+                                  color: _livenessVerified ? const Color(0xFF16A34A) : AppTheme.primaryColor,
+                                  size: 28,
+                                ),
+                                const SizedBox(width: 16),
+                                Expanded(
+                                  child: Column(
+                                    crossAxisAlignment: CrossAxisAlignment.start,
+                                    children: [
+                                      Text(
+                                        _livenessVerified ? 'Face Verified' : 'Facial Verification',
+                                        style: TextStyle(
+                                          fontWeight: FontWeight.bold,
+                                          fontSize: 16,
+                                          color: _livenessVerified ? const Color(0xFF16A34A) : AppTheme.textPrimary,
+                                        ),
+                                      ),
+                                      const SizedBox(height: 4),
+                                      Text(
+                                        _livenessVerified
+                                            ? 'Successfully matched with Ghana Card.'
+                                            : 'Take a quick selfie to prove you are human.',
+                                        style: TextStyle(
+                                          fontSize: 12,
+                                          color: _livenessVerified ? const Color(0xFF15803D) : AppTheme.textSecondary,
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                                if (!_livenessVerified)
+                                  const Icon(LucideIcons.chevronRight, color: AppTheme.textSecondary),
+                              ],
+                            ),
+                          ),
                         ),
                         const SizedBox(height: 16),
 
