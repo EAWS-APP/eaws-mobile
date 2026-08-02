@@ -8,7 +8,14 @@ class EawsApiClient {
 
   static final EawsApiClient instance = EawsApiClient._();
 
-  static String baseUrl = 'http://localhost:3000/api';
+  static String get baseUrl {
+    try {
+      if (Platform.isAndroid) {
+        return 'http://10.0.2.2:5001/api';
+      }
+    } catch (_) {}
+    return 'http://localhost:5001/api';
+  }
 
   Future<dynamic> get(String path, {Map<String, String>? query}) {
     return _send('GET', path, query: query);
