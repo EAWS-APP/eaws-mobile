@@ -5,6 +5,7 @@ import '../../core/theme.dart';
 import 'community_feed_screen.dart';
 import 'report_incident_screen.dart';
 import 'incident_detail_screen.dart';
+import 'community_post_detail_screen.dart';
 
 class MyReportsScreen extends StatefulWidget {
   const MyReportsScreen({super.key});
@@ -663,22 +664,35 @@ class _MyReportsScreenState extends State<MyReportsScreen> {
                                           ElevatedButton.icon(
                                             onPressed: () {
                                               HapticFeedback.lightImpact();
-                                              Navigator.push(
-                                                context,
-                                                MaterialPageRoute(
-                                                  builder: (context) => IncidentDetailScreen(
-                                                    report: report,
-                                                    onUpdate: (updated) {
-                                                      final list = List<Map<String, dynamic>>.from(communityReportsNotifier.value);
-                                                      final idx = list.indexWhere((r) => r['id'] == report['id']);
-                                                      if (idx != -1) {
-                                                        list[idx] = updated;
-                                                        communityReportsNotifier.value = list;
-                                                      }
-                                                    },
+                                              final isCommunity = report['post_type'] == 'community' ||
+                                                  report['category'].toString().toUpperCase() == 'COMMUNITY';
+                                              if (isCommunity) {
+                                                Navigator.push(
+                                                  context,
+                                                  MaterialPageRoute(
+                                                    builder: (context) => CommunityPostDetailScreen(
+                                                      report: report,
+                                                    ),
                                                   ),
-                                                ),
-                                              );
+                                                );
+                                              } else {
+                                                Navigator.push(
+                                                  context,
+                                                  MaterialPageRoute(
+                                                    builder: (context) => IncidentDetailScreen(
+                                                      report: report,
+                                                      onUpdate: (updated) {
+                                                        final list = List<Map<String, dynamic>>.from(communityReportsNotifier.value);
+                                                        final idx = list.indexWhere((r) => r['id'] == report['id']);
+                                                        if (idx != -1) {
+                                                          list[idx] = updated;
+                                                          communityReportsNotifier.value = list;
+                                                        }
+                                                      },
+                                                    ),
+                                                  ),
+                                                );
+                                              }
                                             },
                                             icon: const Icon(LucideIcons.eye, size: 14, color: Colors.white),
                                             label: const Text('View', style: TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.bold)),

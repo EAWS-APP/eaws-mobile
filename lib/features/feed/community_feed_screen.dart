@@ -1,10 +1,13 @@
 import 'package:flutter/material.dart';
+import 'dart:async';
 import 'dart:io';
 import 'package:flutter/services.dart';
 import 'package:lucide_icons/lucide_icons.dart';
 import '../../core/theme.dart';
 import 'report_incident_screen.dart';
+import 'community_post_screen.dart';
 import 'incident_detail_screen.dart';
+import 'community_post_detail_screen.dart';
 import 'my_reports_screen.dart';
 import 'reactions_comments_screen.dart';
 import 'incident_api.dart';
@@ -75,12 +78,13 @@ class CommunityFeedScreen extends StatefulWidget {
 }
 
 class _CommunityFeedScreenState extends State<CommunityFeedScreen> {
+  Timer? _feedRefreshTimer;
   String _selectedCategory = 'All';
-  final List<String> _categories = ['All', 'Nearby', 'Flood', 'Fire', 'Suspicious', 'Medical'];
+  final List<String> _categories = ['All', 'Nearby', 'Updates', 'Flood', 'Fire', 'Suspicious', 'Medical'];
 
   // Upgraded live filtering & search options matching screen 4
   String _searchQuery = '';
-  Set<String> _activeTypes = {'Flood', 'Fire', 'Medical', 'Suspicious', 'Earthquake', 'Other'};
+  Set<String> _activeTypes = {'Flood', 'Fire', 'Medical', 'Suspicious', 'Police', 'Earthquake', 'Other'};
   Set<String> _activeSeverities = {'CRITICAL', 'WARNING', 'MEDIUM', 'LOW'};
   double _distanceFromMe = 15.0;
   String _timeRange = 'All Time';
@@ -90,22 +94,167 @@ class _CommunityFeedScreenState extends State<CommunityFeedScreen> {
   void initState() {
     super.initState();
     _loadIncidentFeed();
+    _feedRefreshTimer = Timer.periodic(const Duration(seconds: 10), (_) => _loadIncidentFeed());
+  }
+
+  @override
+  void dispose() {
+    _feedRefreshTimer?.cancel();
+    super.dispose();
   }
 
   Future<void> _loadIncidentFeed() async {
     try {
-      final incidents = await IncidentApi.instance.getFeed(
-        category: _selectedCategory,
-        distanceKm: _distanceFromMe,
-        timeRange: _timeRange,
-        sort: _sortBy,
-      );
-      if (incidents.isNotEmpty) {
-        communityReportsNotifier.value = incidents.map((incident) => incident.toUiMap()).toList();
-      }
+      // Fetch incidents and community posts in parallel
+      final results = await Future.wait([
+        IncidentApi.instance.getFeed(sort: _sortBy),
+        IncidentApi.instance.getCommunityPosts(),
+      ]);
+
+      if (!mounted) return;
+
+      final incidents = results[0] as List;
+      final communityPosts = results[1] as List<Map<String, dynamic>>;
+
+      // Preserve local liked state across refreshes
+      final likedIds = communityReportsNotifier.value
+          .where((r) => r['isLiked'] == true)
+          .map((r) => r['id'].toString())
+          .toSet();
+
+      // Map incidents to UI cards
+      final incidentCards = (incidents as List).map((incident) {
+        final report = incident.toUiMap();
+        report['isLiked'] = likedIds.contains(report['id'].toString());
+        return report;
+      }).toList();
+
+      // Map community posts to UI cards (purple theme)
+      final postCards = communityPosts.map((p) {
+        return <String, dynamic>{
+          'id': p['id'],
+          'post_type': 'community',
+          'userName': p['author_name'] ?? 'Ghana Citizen',
+          'initials': p['author_initials'] ?? 'GC',
+          'avatarColor': const Color(0xFF8B5CF6),
+          'isVerified': p['is_verified'] ?? true,
+          'timeAgo': _timeAgoFromIso(p['created_at'] ?? ''),
+          'createdAt': p['created_at'] ?? DateTime.now().toIso8601String(),
+          'category': 'COMMUNITY',
+          'categoryColor': const Color(0xFF8B5CF6),
+          'title': p['content'] ?? '',
+          'description': '',
+          'content': p['content'] ?? '',
+          'severity': 'COMMUNITY',
+          'location': '',
+          'likes': p['likes_count'] ?? 0,
+          'commentsCount': p['replies_count'] ?? 0,
+          'replies': List<Map<String, dynamic>>.from(
+            (p['replies'] as List? ?? []).map((r) => Map<String, dynamic>.from(r as Map))
+          ),
+          'isLiked': likedIds.contains(p['id'].toString()),
+          'imageAsset': p['image_url'],
+        };
+      }).toList();
+
+      // Merge and sort chronologically (newest first)
+      final List<Map<String, dynamic>> merged = List<Map<String, dynamic>>.from([...incidentCards, ...postCards]);
+      merged.sort((a, b) {
+        final ta = DateTime.tryParse(a['createdAt']?.toString() ?? '') ?? DateTime(0);
+        final tb = DateTime.tryParse(b['createdAt']?.toString() ?? '') ?? DateTime(0);
+        return tb.compareTo(ta);
+      });
+
+      communityReportsNotifier.value = merged;
     } catch (e) {
       print('EAWS Feed API unavailable, keeping local mock feed: $e');
     }
+  }
+
+  String _timeAgoFromIso(String iso) {
+    final dt = DateTime.tryParse(iso);
+    if (dt == null) return 'Just now';
+    final delta = DateTime.now().difference(dt);
+    if (delta.inMinutes < 1) return 'Just now';
+    if (delta.inMinutes < 60) return '${delta.inMinutes} min ago';
+    if (delta.inHours < 24) return '${delta.inHours} hr ago';
+    return '${delta.inDays} days ago';
+  }
+
+  void _showComposeSheet() {
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: Colors.transparent,
+      builder: (ctx) => Container(
+        decoration: const BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+        ),
+        padding: const EdgeInsets.fromLTRB(24, 16, 24, 36),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            // Drag handle
+            Center(
+              child: Container(
+                width: 40, height: 4,
+                decoration: BoxDecoration(
+                  color: const Color(0xFFE5E7EB),
+                  borderRadius: BorderRadius.circular(2),
+                ),
+              ),
+            ),
+            const SizedBox(height: 20),
+            const Text(
+              'What would you like to do?',
+              style: TextStyle(
+                fontSize: 17, fontWeight: FontWeight.bold, color: AppTheme.textPrimary,
+              ),
+            ),
+            const SizedBox(height: 6),
+            const Text(
+              'Share a community update or file a formal incident report.',
+              style: TextStyle(fontSize: 13, color: AppTheme.textSecondary),
+            ),
+            const SizedBox(height: 20),
+
+            // Option 1 — Community post
+            _ComposeOption(
+              icon: LucideIcons.messageCircle,
+              color: const Color(0xFF8B5CF6),
+              bgColor: const Color(0xFFEDE9FE),
+              title: 'Share a Community Update',
+              subtitle: 'Chat, tips, alerts — anything your neighbours should know',
+              onTap: () {
+                Navigator.pop(ctx);
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(builder: (_) => const CommunityPostScreen()),
+                );
+              },
+            ),
+            const SizedBox(height: 12),
+
+            // Option 2 — Incident report
+            _ComposeOption(
+              icon: LucideIcons.alertTriangle,
+              color: AppTheme.primaryColor,
+              bgColor: const Color(0xFFFFEBEB),
+              title: 'Report an Incident',
+              subtitle: 'File a formal emergency report (fire, flood, crime…)',
+              onTap: () {
+                Navigator.pop(ctx);
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(builder: (_) => const ReportIncidentScreen()),
+                );
+              },
+            ),
+          ],
+        ),
+      ),
+    );
   }
 
   @override
@@ -307,21 +456,35 @@ class _CommunityFeedScreenState extends State<CommunityFeedScreen> {
                         // 2. Incident Category tab selection
                         final cat = report['category'].toString().toLowerCase();
                         if (_selectedCategory != 'All' && _selectedCategory != 'Nearby') {
-                          if (cat != _selectedCategory.toLowerCase()) return false;
+                          if (_selectedCategory == 'Updates') {
+                            final isUpdate = report['post_type'] == 'community' || cat == 'community';
+                            if (!isUpdate) return false;
+                          } else {
+                            if (cat != _selectedCategory.toLowerCase()) return false;
+                          }
                         }
 
-                        // Map category to types checkbox set
-                        String type = 'Other';
-                        if (cat == 'flood') type = 'Flood';
-                        if (cat == 'fire') type = 'Fire';
-                        if (cat == 'medical') type = 'Medical';
-                        if (cat == 'suspicious') type = 'Suspicious';
-                        
-                        if (!_activeTypes.contains(type)) return false;
+                        // Community posts bypass the incident-type chip filter entirely
+                        final isCommunityType = report['post_type'] == 'community' || cat == 'community';
+                        if (!isCommunityType) {
+                          // Map backend category name to UI type label
+                          String type = 'Other';
+                          if (cat == 'flood') type = 'Flood';
+                          if (cat == 'fire') type = 'Fire';
+                          if (cat == 'medical') type = 'Medical';
+                          if (cat == 'suspicious') type = 'Suspicious';
+                          if (cat == 'police' || cat == 'crime') type = 'Police';
+                          if (cat == 'earthquake') type = 'Earthquake';
+                          if (!_activeTypes.contains(type)) return false;
+                        }
 
-                        // 3. Severity filter
-                        final sev = report['severity'].toString().toUpperCase();
-                        if (!_activeSeverities.contains(sev)) return false;
+                        // 3. Severity filter — community posts always pass
+                        final isCommunity = report['post_type'] == 'community' ||
+                            report['category'].toString().toUpperCase() == 'COMMUNITY';
+                        if (!isCommunity) {
+                          final sev = report['severity'].toString().toUpperCase();
+                          if (sev != 'PENDING TRIAGE' && !_activeSeverities.contains(sev)) return false;
+                        }
 
                         return true;
                       }).toList();
@@ -330,8 +493,7 @@ class _CommunityFeedScreenState extends State<CommunityFeedScreen> {
                       if (_sortBy == 'Most Reactions') {
                         filteredReports.sort((a, b) => (b['likes'] ?? 0).compareTo(a['likes'] ?? 0));
                       } else {
-                        // Default to chronological ID ordering
-                        filteredReports.sort((a, b) => (b['id'] ?? 0).compareTo(a['id'] ?? 0));
+                        filteredReports.sort((a, b) => _reportTimestamp(b).compareTo(_reportTimestamp(a)));
                       }
 
                       if (filteredReports.isEmpty) {
@@ -366,26 +528,39 @@ class _CommunityFeedScreenState extends State<CommunityFeedScreen> {
                         itemBuilder: (context, index) {
                           final report = filteredReports[index];
                           
-                          // Wrap card in tap navigation to detail view!
+                          // Route community posts to reply sheet; incidents to detail screen
                           return GestureDetector(
                             onTap: () {
                               HapticFeedback.lightImpact();
-                              Navigator.push(
-                                context,
-                                MaterialPageRoute(
-                                  builder: (context) => IncidentDetailScreen(
-                                    report: report,
-                                    onUpdate: (updated) {
-                                      final list = List<Map<String, dynamic>>.from(communityReportsNotifier.value);
-                                      final idx = list.indexWhere((r) => r['id'] == report['id']);
-                                      if (idx != -1) {
-                                        list[idx] = updated;
-                                        communityReportsNotifier.value = list;
-                                      }
-                                    },
+                              final isCommunity = report['post_type'] == 'community' ||
+                                  report['category'].toString().toUpperCase() == 'COMMUNITY';
+                              if (isCommunity) {
+                                Navigator.push(
+                                  context,
+                                  MaterialPageRoute(
+                                    builder: (context) => CommunityPostDetailScreen(
+                                      report: report,
+                                    ),
                                   ),
-                                ),
-                              );
+                                );
+                              } else {
+                                Navigator.push(
+                                  context,
+                                  MaterialPageRoute(
+                                    builder: (context) => IncidentDetailScreen(
+                                      report: report,
+                                      onUpdate: (updated) {
+                                        final list = List<Map<String, dynamic>>.from(communityReportsNotifier.value);
+                                        final idx = list.indexWhere((r) => r['id'] == report['id']);
+                                        if (idx != -1) {
+                                          list[idx] = updated;
+                                          communityReportsNotifier.value = list;
+                                        }
+                                      },
+                                    ),
+                                  ),
+                                );
+                              }
                             },
                             child: _buildFeedCard(report),
                           );
@@ -398,19 +573,14 @@ class _CommunityFeedScreenState extends State<CommunityFeedScreen> {
             ),
           ),
 
-          // 3. Floating Action Button (FAB) matching Screenshot 1
+          // 3. Floating Action Button → tapping shows a choice sheet
           Positioned(
             bottom: 16,
             right: 20,
             child: FloatingActionButton(
               onPressed: () {
                 HapticFeedback.mediumImpact();
-                Navigator.push(
-                  context,
-                  MaterialPageRoute(
-                    builder: (context) => const ReportIncidentScreen(),
-                  ),
-                );
+                _showComposeSheet();
               },
               backgroundColor: AppTheme.primaryColor,
               elevation: 4,
@@ -428,6 +598,8 @@ class _CommunityFeedScreenState extends State<CommunityFeedScreen> {
     final int likeCount = report['likes'] ?? 0;
     final int commentCount = report['commentsCount'] ?? 
         (report['comments'] is List ? (report['comments'] as List).length : (report['comments'] ?? 0));
+    final bool isCommunity = report['post_type'] == 'community' ||
+        report['category'].toString().toUpperCase() == 'COMMUNITY';
 
     return Container(
       margin: const EdgeInsets.only(bottom: 16),
@@ -537,29 +709,42 @@ class _CommunityFeedScreenState extends State<CommunityFeedScreen> {
                     ),
                     const SizedBox(height: 12),
 
-                    // Title
-                    Text(
-                      report['title'],
-                      style: const TextStyle(
-                        fontWeight: FontWeight.bold,
-                        fontSize: 15.5,
-                        color: AppTheme.textPrimary,
-                        height: 1.3,
-                      ),
-                    ),
-                    const SizedBox(height: 6),
+                    // Content/Title
 
-                    // Description text
-                    Text(
-                      report['description'],
-                      style: const TextStyle(
-                        color: AppTheme.textSecondary,
-                        fontSize: 13,
-                        height: 1.4,
+                    if (isCommunity) ...[
+                      Text(
+                        report['title'],
+                        style: const TextStyle(
+                          fontSize: 14.5,
+                          color: AppTheme.textPrimary,
+                          height: 1.45,
+                        ),
                       ),
-                      maxLines: 3,
-                      overflow: TextOverflow.ellipsis,
-                    ),
+                    ] else ...[
+                      // Title
+                      Text(
+                        report['title'],
+                        style: const TextStyle(
+                          fontWeight: FontWeight.bold,
+                          fontSize: 15.5,
+                          color: AppTheme.textPrimary,
+                          height: 1.3,
+                        ),
+                      ),
+                      const SizedBox(height: 6),
+
+                      // Description text
+                      Text(
+                        report['description'],
+                        style: const TextStyle(
+                          color: AppTheme.textSecondary,
+                          fontSize: 13,
+                          height: 1.4,
+                        ),
+                        maxLines: 3,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ],
                     const SizedBox(height: 10),
 
                     // Card Incident Image with translucent severity warning tag on top left
@@ -570,12 +755,12 @@ class _CommunityFeedScreenState extends State<CommunityFeedScreen> {
                         isLocalFile: !report['imageAsset'].startsWith('http') && !report['imageAsset'].startsWith('assets/'),
                         isVideo: report['isVideo'] == true,
                       ),
-                    ] else if (report['category'] == 'FLOOD') ...[
+                    ] else if (!isCommunity && report['category'] == 'FLOOD') ...[
                       _buildIncidentImage(
                         'https://images.unsplash.com/photo-1547683905-f686c993aae5?auto=format&fit=crop&q=80&w=800',
                         report['severity'],
                       ),
-                    ] else if (report['category'] == 'FIRE') ...[
+                    ] else if (!isCommunity && report['category'] == 'FIRE') ...[
                       _buildIncidentImage(
                         'https://images.unsplash.com/photo-1508873699372-7aeab60b44ab?auto=format&fit=crop&q=80&w=800',
                         report['severity'],
@@ -587,23 +772,26 @@ class _CommunityFeedScreenState extends State<CommunityFeedScreen> {
                     // Card Footer Location pin & likes + comments interaction stats
                     Row(
                       children: [
-                        const Icon(
-                          LucideIcons.mapPin,
-                          size: 13,
-                          color: AppTheme.textSecondary,
-                        ),
-                        const SizedBox(width: 4),
-                        Expanded(
-                          child: Text(
-                            report['location'],
-                            style: const TextStyle(
-                              color: AppTheme.textSecondary,
-                              fontSize: 12,
-                              fontWeight: FontWeight.w500,
-                            ),
-                            overflow: TextOverflow.ellipsis,
+                        if (report['location'].toString().trim().isNotEmpty) ...[
+                          const Icon(
+                            LucideIcons.mapPin,
+                            size: 13,
+                            color: AppTheme.textSecondary,
                           ),
-                        ),
+                          const SizedBox(width: 4),
+                          Expanded(
+                            child: Text(
+                              report['location'],
+                              style: const TextStyle(
+                                color: AppTheme.textSecondary,
+                                fontSize: 12,
+                                fontWeight: FontWeight.w500,
+                              ),
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ),
+                        ] else
+                          const Spacer(),
                         // Likes action button
                         GestureDetector(
                           behavior: HitTestBehavior.opaque,
@@ -761,16 +949,36 @@ class _CommunityFeedScreenState extends State<CommunityFeedScreen> {
     );
   }
 
-  void _toggleLike(int id) {
+  Future<void> _toggleLike(dynamic id) async {
     final updatedList = List<Map<String, dynamic>>.from(communityReportsNotifier.value);
-    final index = updatedList.indexWhere((r) => r['id'] == id);
+    final index = updatedList.indexWhere((r) => r['id'].toString() == id.toString());
     if (index != -1) {
-      final report = updatedList[index];
+      final report = Map<String, dynamic>.from(updatedList[index]);
       final isLiked = report['isLiked'] ?? false;
       report['isLiked'] = !isLiked;
       report['likes'] = isLiked ? (report['likes'] - 1) : (report['likes'] + 1);
+      updatedList[index] = report;
       communityReportsNotifier.value = updatedList;
+
+      try {
+        await IncidentApi.instance.react(id.toString(), 'like');
+        await _loadIncidentFeed();
+      } catch (e) {
+        print('EAWS Reaction API unavailable, keeping local like: $e');
+      }
     }
+  }
+
+  int _reportTimestamp(Map<String, dynamic> report) {
+    final createdAt = report['createdAt']?.toString();
+    if (createdAt != null) {
+      final parsed = DateTime.tryParse(createdAt);
+      if (parsed != null) return parsed.millisecondsSinceEpoch;
+    }
+
+    final id = report['id'];
+    if (id is int) return id;
+    return int.tryParse(id?.toString() ?? '') ?? 0;
   }
 
   // Upgraded dynamic filter alerts bottom sheet styled exactly like Screen 4!
@@ -1275,4 +1483,408 @@ class _CommunityFeedScreenState extends State<CommunityFeedScreen> {
       },
     );
   }
+
+  void _showReplySheet(Map<String, dynamic> report) {
+    final TextEditingController replyController = TextEditingController();
+
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (context) {
+        return DraggableScrollableSheet(
+          initialChildSize: 0.85,
+          minChildSize: 0.5,
+          maxChildSize: 0.95,
+          builder: (ctx, scrollControllerInner) {
+            return Container(
+              decoration: const BoxDecoration(
+                color: Colors.white,
+                borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+              ),
+              child: StatefulBuilder(
+                builder: (sheetContext, setSheetState) {
+                  final currentReports = communityReportsNotifier.value;
+                  final currentReport = currentReports.firstWhere(
+                    (r) => r['id'].toString() == report['id'].toString(),
+                    orElse: () => report,
+                  );
+                  final List<Map<String, dynamic>> replies = 
+                      List<Map<String, dynamic>>.from(currentReport['replies'] ?? []);
+
+                  Future<void> sendReply() async {
+                    final text = replyController.text.trim();
+                    if (text.isEmpty) return;
+
+                    HapticFeedback.lightImpact();
+
+                    final newReply = {
+                      'id': 'cpr-local-${DateTime.now().millisecondsSinceEpoch}',
+                      'author_name': 'Ghana Citizen',
+                      'author_initials': 'GC',
+                      'content': text,
+                      'created_at': DateTime.now().toIso8601String(),
+                    };
+
+                    // Prepend/append locally to global state
+                    final list = List<Map<String, dynamic>>.from(communityReportsNotifier.value);
+                    final idx = list.indexWhere((r) => r['id'].toString() == report['id'].toString());
+                    if (idx != -1) {
+                      final updated = Map<String, dynamic>.from(list[idx]);
+                      final repliesList = List<Map<String, dynamic>>.from(updated['replies'] ?? []);
+                      repliesList.add(newReply);
+                      updated['replies'] = repliesList;
+                      updated['commentsCount'] = repliesList.length;
+                      list[idx] = updated;
+                      communityReportsNotifier.value = list;
+                    }
+
+                    replyController.clear();
+                    setSheetState(() {});
+
+                    // Auto-scroll to bottom of the list
+                    Future.delayed(const Duration(milliseconds: 100), () {
+                      if (scrollControllerInner.hasClients) {
+                        scrollControllerInner.animateTo(
+                          scrollControllerInner.position.maxScrollExtent,
+                          duration: const Duration(milliseconds: 300),
+                          curve: Curves.easeOut,
+                        );
+                      }
+                    });
+
+                    try {
+                      final saved = await IncidentApi.instance.addReply(report['id'].toString(), text);
+                      final list = List<Map<String, dynamic>>.from(communityReportsNotifier.value);
+                      final idx = list.indexWhere((r) => r['id'].toString() == report['id'].toString());
+                      if (idx != -1) {
+                        final updated = Map<String, dynamic>.from(list[idx]);
+                        final repliesList = List<Map<String, dynamic>>.from(updated['replies'] ?? []);
+                        final rIdx = repliesList.indexWhere((r) => r['id'] == newReply['id']);
+                        if (rIdx != -1) {
+                          repliesList[rIdx] = Map<String, dynamic>.from(saved);
+                          updated['replies'] = repliesList;
+                          list[idx] = updated;
+                          communityReportsNotifier.value = list;
+                        }
+                      }
+                      setSheetState(() {});
+                    } catch (e) {
+                      print('Error submitting reply: $e');
+                    }
+                  }
+
+                  return Column(
+                    children: [
+                      // Header
+                      Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                        child: Row(
+                          children: [
+                            const Text(
+                              'Discussion',
+                              style: TextStyle(
+                                fontSize: 18,
+                                fontWeight: FontWeight.bold,
+                                color: AppTheme.textPrimary,
+                              ),
+                            ),
+                            const Spacer(),
+                            IconButton(
+                              icon: const Icon(LucideIcons.x, size: 20, color: AppTheme.textSecondary),
+                              onPressed: () => Navigator.pop(sheetContext),
+                            ),
+                          ],
+                        ),
+                      ),
+                      const Divider(height: 1),
+
+                      // Scrollable replies
+                      Expanded(
+                        child: ListView(
+                          controller: scrollControllerInner,
+                          padding: const EdgeInsets.all(16),
+                          children: [
+                            // Main Post Card
+                            Container(
+                              padding: const EdgeInsets.all(16),
+                              decoration: BoxDecoration(
+                                color: const Color(0xFFF9FAFB),
+                                borderRadius: BorderRadius.circular(16),
+                                border: Border.all(color: const Color(0xFFE5E7EB)),
+                              ),
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Row(
+                                    children: [
+                                      CircleAvatar(
+                                        radius: 18,
+                                        backgroundColor: const Color(0xFFEDE9FE),
+                                        child: Text(
+                                          currentReport['initials'],
+                                          style: const TextStyle(
+                                            color: Color(0xFF8B5CF6),
+                                            fontWeight: FontWeight.bold,
+                                            fontSize: 13,
+                                          ),
+                                        ),
+                                      ),
+                                      const SizedBox(width: 10),
+                                      Expanded(
+                                        child: Column(
+                                          crossAxisAlignment: CrossAxisAlignment.start,
+                                          children: [
+                                            Row(
+                                              children: [
+                                                Text(
+                                                  currentReport['userName'],
+                                                  style: const TextStyle(
+                                                    fontWeight: FontWeight.bold,
+                                                    fontSize: 14,
+                                                    color: AppTheme.textPrimary,
+                                                  ),
+                                                ),
+                                                if (currentReport['isVerified'] == true) ...[
+                                                  const SizedBox(width: 4),
+                                                  const Icon(
+                                                    Icons.verified,
+                                                    color: Color(0xFF10B981),
+                                                    size: 15,
+                                                  ),
+                                                ],
+                                              ],
+                                            ),
+                                            Text(
+                                              currentReport['timeAgo'],
+                                              style: const TextStyle(
+                                                color: AppTheme.textSecondary,
+                                                fontSize: 11.5,
+                                              ),
+                                            ),
+                                          ],
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                  const SizedBox(height: 12),
+                                  Text(
+                                    currentReport['title'],
+                                    style: const TextStyle(
+                                      fontSize: 15.5,
+                                      color: AppTheme.textPrimary,
+                                      height: 1.4,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                            const SizedBox(height: 20),
+
+                            // Replies header label
+                            Text(
+                              'REPLIES (${replies.length})',
+                              style: const TextStyle(
+                                fontSize: 11,
+                                fontWeight: FontWeight.bold,
+                                color: AppTheme.textSecondary,
+                                letterSpacing: 1.1,
+                              ),
+                            ),
+                            const SizedBox(height: 12),
+
+                            // Replies Stream
+                            if (replies.isEmpty)
+                              const Padding(
+                                padding: EdgeInsets.all(40),
+                                child: Center(
+                                  child: Text(
+                                    'No replies yet. Start the conversation!',
+                                    style: TextStyle(color: Colors.grey, fontSize: 13),
+                                  ),
+                                ),
+                              )
+                            else
+                              ...replies.map((reply) {
+                                return Container(
+                                  margin: const EdgeInsets.only(bottom: 12),
+                                  padding: const EdgeInsets.all(14),
+                                  decoration: BoxDecoration(
+                                    color: Colors.white,
+                                    borderRadius: BorderRadius.circular(16),
+                                    border: Border.all(color: const Color(0xFFE5E7EB)),
+                                  ),
+                                  child: Column(
+                                    crossAxisAlignment: CrossAxisAlignment.start,
+                                    children: [
+                                      Row(
+                                        children: [
+                                          CircleAvatar(
+                                            radius: 14,
+                                            backgroundColor: const Color(0xFFF3F4F6),
+                                            child: Text(
+                                              reply['author_initials'] ?? 'GC',
+                                              style: const TextStyle(
+                                                color: AppTheme.textSecondary,
+                                                fontWeight: FontWeight.bold,
+                                                fontSize: 10,
+                                              ),
+                                            ),
+                                          ),
+                                          const SizedBox(width: 8),
+                                          Text(
+                                            reply['author_name'] ?? 'Ghana Citizen',
+                                            style: const TextStyle(
+                                              fontWeight: FontWeight.bold,
+                                              fontSize: 13,
+                                              color: AppTheme.textPrimary,
+                                            ),
+                                          ),
+                                        ],
+                                      ),
+                                      const SizedBox(height: 8),
+                                      Text(
+                                        reply['content'] ?? '',
+                                        style: const TextStyle(
+                                          color: AppTheme.textPrimary,
+                                          fontSize: 13.5,
+                                          height: 1.4,
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                );
+                              }).toList(),
+                          ],
+                        ),
+                      ),
+
+                      // Send reply input
+                      Padding(
+                        padding: EdgeInsets.only(
+                          left: 16, right: 16, top: 8,
+                          bottom: MediaQuery.of(sheetContext).viewInsets.bottom + 16,
+                        ),
+                        child: Row(
+                          children: [
+                            Expanded(
+                              child: Container(
+                                decoration: BoxDecoration(
+                                  color: const Color(0xFFF3F4F6),
+                                  borderRadius: BorderRadius.circular(24),
+                                ),
+                                padding: const EdgeInsets.symmetric(horizontal: 16),
+                                child: TextField(
+                                  controller: replyController,
+                                  style: const TextStyle(fontSize: 14),
+                                  decoration: const InputDecoration(
+                                    hintText: 'Post your reply...',
+                                    border: InputBorder.none,
+                                    enabledBorder: InputBorder.none,
+                                    focusedBorder: InputBorder.none,
+                                  ),
+                                  onSubmitted: (_) => sendReply(),
+                                ),
+                              ),
+                            ),
+                            const SizedBox(width: 12),
+                            GestureDetector(
+                              onTap: sendReply,
+                              child: Container(
+                                padding: const EdgeInsets.all(12),
+                                decoration: const BoxDecoration(
+                                  color: Color(0xFF8B5CF6),
+                                  shape: BoxShape.circle,
+                                ),
+                                child: const Icon(LucideIcons.send, color: Colors.white, size: 18),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
+                  );
+                },
+              ),
+            );
+          },
+        );
+      },
+    );
+  }
 }
+
+class _ComposeOption extends StatelessWidget {
+  final IconData icon;
+  final Color color;
+  final Color bgColor;
+  final String title;
+  final String subtitle;
+  final VoidCallback onTap;
+
+  const _ComposeOption({
+    required this.icon,
+    required this.color,
+    required this.bgColor,
+    required this.title,
+    required this.subtitle,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: () {
+        HapticFeedback.lightImpact();
+        onTap();
+      },
+      child: Container(
+        padding: const EdgeInsets.all(16),
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(color: const Color(0xFFE5E7EB), width: 1.5),
+        ),
+        child: Row(
+          children: [
+            Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: bgColor,
+                shape: BoxShape.circle,
+              ),
+              child: Icon(icon, color: color, size: 22),
+            ),
+            const SizedBox(width: 16),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    title,
+                    style: const TextStyle(
+                      fontWeight: FontWeight.bold,
+                      fontSize: 15,
+                      color: AppTheme.textPrimary,
+                    ),
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    subtitle,
+                    style: const TextStyle(
+                      fontSize: 12,
+                      color: AppTheme.textSecondary,
+                      height: 1.3,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const Icon(LucideIcons.chevronRight, size: 18, color: AppTheme.textSecondary),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
