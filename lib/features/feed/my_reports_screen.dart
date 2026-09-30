@@ -2,6 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:lucide_icons/lucide_icons.dart';
 import '../../core/theme.dart';
+import '../../core/user_session.dart';
+import '../../core/user_data_store.dart';
 import 'community_feed_screen.dart';
 import 'report_incident_screen.dart';
 import 'incident_detail_screen.dart';
@@ -139,95 +141,25 @@ class _EditReportDialogState extends State<_EditReportDialog> {
 }
 
 class _MyReportsScreenState extends State<MyReportsScreen> {
-  // Ensure we add some mock personal reports initially to make the screen look full and rich
   @override
   void initState() {
     super.initState();
-    _injectMockPersonalReportsIfNeeded();
+    _loadUserPersonalReports();
   }
 
-  void _injectMockPersonalReportsIfNeeded() {
-    final list = List<Map<String, dynamic>>.from(communityReportsNotifier.value);
-    final hasMine = list.any((r) => r['userName'] == 'Ghana Citizen' || r['userName'] == 'Anonymous Citizen');
-    if (!hasMine) {
-      // Pre-populate some premium mock personal reports to match screen 5 stats exactly
-      final mockMine = [
-        {
-          'id': 101,
-          'userName': 'Ghana Citizen',
-          'initials': 'GC',
-          'avatarColor': AppTheme.primaryColor,
-          'isVerified': true,
-          'timeAgo': '2 min ago',
-          'category': 'FLOOD',
-          'categoryColor': const Color(0xFFEF4444),
-          'title': 'Rising water levels on Liberation Road',
-          'description': 'Water has reached knee level near the traffic light. Vehicles are stalling.',
-          'severity': 'CRITICAL',
-          'location': 'Liberation Road, Accra',
-          'status': 'ACTIVE', // ACTIVE status matches ACTIVE tag in screen 5
-          'likes': 24,
-          'commentsCount': 8,
-          'views': 312,
-          'isLiked': false,
-          'comments': [
-            {
-              'id': 1,
-              'userName': 'Ama Mensah',
-              'initials': 'AM',
-              'avatarColor': const Color(0xFFEF4444),
-              'isVerified': true,
-              'timeAgo': '1 min ago',
-              'content': 'I just passed through there; it\'s really bad. Stay away!',
-              'likes': 5,
-            }
-          ]
-        },
-        {
-          'id': 102,
-          'userName': 'Ghana Citizen',
-          'initials': 'GC',
-          'avatarColor': AppTheme.primaryColor,
-          'isVerified': true,
-          'timeAgo': '15 min ago',
-          'category': 'FIRE',
-          'categoryColor': const Color(0xFFF59E0B),
-          'title': 'Bushfire spotted near Achimota Forest',
-          'description': 'Thick smoke visible from the main road. Fire service has been called.',
-          'severity': 'WARNING',
-          'location': 'Achimota Forest, Accra',
-          'status': 'ACTIVE',
-          'likes': 12,
-          'commentsCount': 5,
-          'views': 188,
-          'isLiked': false,
-          'comments': []
-        },
-        {
-          'id': 103,
-          'userName': 'Ghana Citizen',
-          'initials': 'GC',
-          'avatarColor': AppTheme.primaryColor,
-          'isVerified': true,
-          'timeAgo': '3 days ago',
-          'category': 'MEDICAL',
-          'categoryColor': const Color(0xFF3B82F6),
-          'title': 'Injured person near Tema Station',
-          'description': 'Someone collapsed near the terminal. Ambulance is en-route.',
-          'severity': 'MEDIUM',
-          'location': 'Tema Station, Accra',
-          'status': 'RESOLVED', // RESOLVED status matches RESOLVED tag in screen 5
-          'likes': 6,
-          'commentsCount': 2,
-          'views': 87,
-          'isLiked': false,
-          'comments': []
-        },
-      ];
-      list.addAll(mockMine);
+  Future<void> _loadUserPersonalReports() async {
+    final userSavedReports = await UserDataStore.instance.loadUserReports();
+    if (userSavedReports.isNotEmpty) {
+      final list = List<Map<String, dynamic>>.from(communityReportsNotifier.value);
+      for (var rep in userSavedReports) {
+        if (!list.any((r) => r['id'].toString() == rep['id'].toString())) {
+          list.insert(0, rep);
+        }
+      }
       communityReportsNotifier.value = list;
     }
   }
+
 
   void _handleDeleteReport(int id) {
     showDialog(
@@ -286,7 +218,7 @@ class _MyReportsScreenState extends State<MyReportsScreen> {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
           content: Text('This report has already been resolved.'),
-          backgroundColor: const Color(0xFFF59E0B),
+          backgroundColor: Color(0xFFF59E0B),
         ),
       );
       return;
@@ -422,11 +354,11 @@ class _MyReportsScreenState extends State<MyReportsScreen> {
             child: ValueListenableBuilder<List<Map<String, dynamic>>>(
               valueListenable: communityReportsNotifier,
               builder: (context, reports, child) {
-                // Filter only my reports (posted by Ghana Citizen or Anonymous Citizen)
+                // Filter only my reports (posted by active user key or name)
+                final myName = UserSession.instance.displayName;
+                final myKey = UserDataStore.instance.userKey;
                 final myReports = reports.where((r) {
-                  return r['userName'] == 'Ghana Citizen' || 
-                         r['userName'] == 'Anonymous Citizen' ||
-                         r['id'] == 101 || r['id'] == 102 || r['id'] == 103;
+                  return r['userId'] == myKey || r['userName'] == myName;
                 }).toList();
 
                 final int totalCount = myReports.length;

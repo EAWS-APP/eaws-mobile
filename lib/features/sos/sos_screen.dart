@@ -11,7 +11,8 @@ import 'package:url_launcher/url_launcher.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../core/theme.dart';
-import '../../core/api_client.dart';
+import '../../core/user_session.dart';
+import '../../core/user_data_store.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'sos_api.dart';
 
@@ -38,7 +39,7 @@ class _SOSScreenState extends State<SOSScreen> with TickerProviderStateMixin {
   String _address = 'Acquiring GPS location...';
   double? _gpsAccuracy;
   bool _isSilentMode = false;
-  double _readinessScore = 95.0;
+  final double _readinessScore = 95.0;
   bool _showRecoveryScreen = false;
   bool _isSilentModeUnlocked = false;
   String _enteredPin = '';
@@ -46,6 +47,9 @@ class _SOSScreenState extends State<SOSScreen> with TickerProviderStateMixin {
   List<Map<String, dynamic>> _emergencyContacts = [];
   Timer? _backgroundTrackingTimer;
   StreamSubscription<List<ConnectivityResult>>? _connectivitySubscription;
+
+  // Per-user SOS history (loaded from UserDataStore)
+  List<Map<String, dynamic>> _sosHistory = [];
 
   // Responder Tracking
   bool _isDispatched = false;
@@ -99,7 +103,7 @@ class _SOSScreenState extends State<SOSScreen> with TickerProviderStateMixin {
     }
 
     _loadContacts();
-
+    _loadSosHistory();
     _connectivitySubscription = Connectivity().onConnectivityChanged.listen((
       List<ConnectivityResult> results,
     ) {
@@ -137,6 +141,47 @@ class _SOSScreenState extends State<SOSScreen> with TickerProviderStateMixin {
       }
     } catch (e) {
       print('Error loading contacts: $e');
+    }
+  }
+
+  Future<void> _loadSosHistory() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final userKey = UserDataStore.instance.userKey;
+      final raw = prefs.getString('eaws_sos_history_$userKey');
+      if (raw != null) {
+        final List decoded = jsonDecode(raw);
+        if (mounted) {
+          setState(() {
+            _sosHistory = decoded.map((e) => Map<String, dynamic>.from(e)).toList();
+          });
+        }
+      }
+    } catch (e) {
+      print('Error loading SOS history: $e');
+    }
+  }
+
+  Future<void> _saveSosEvent(String type, String location, String status) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final userKey = UserDataStore.instance.userKey;
+      final newEntry = {
+        'type': type,
+        'emoji': type.contains('Medical') ? '🚑' : type.contains('Fire') ? '🚒' : '🚓',
+        'date': 'Just now',
+        'status': status,
+        'statusColor': status == 'Resolved' ? 0xFF10B981 : 0xFFF59E0B,
+        'responseTime': '—',
+        'location': location,
+        'createdAt': DateTime.now().toIso8601String(),
+      };
+      _sosHistory.insert(0, newEntry);
+      if (_sosHistory.length > 20) _sosHistory = _sosHistory.sublist(0, 20);
+      await prefs.setString('eaws_sos_history_$userKey', jsonEncode(_sosHistory));
+      if (mounted) setState(() {});
+    } catch (e) {
+      print('Error saving SOS event: $e');
     }
   }
 
@@ -309,6 +354,13 @@ class _SOSScreenState extends State<SOSScreen> with TickerProviderStateMixin {
 
       // 6. Start dispatch simulation
       _startResponderSimulation();
+
+      // 7. Save to local history
+      _saveSosEvent(
+        _selectedCategory.isNotEmpty ? _selectedCategory : 'Police / Threat',
+        resolvedAddress,
+        'Active',
+      );
     } catch (e) {
       print('EAWS SOS API unavailable, active visual state retained: $e');
       setState(() {
@@ -345,8 +397,9 @@ class _SOSScreenState extends State<SOSScreen> with TickerProviderStateMixin {
       });
     }
 
+    final String userName = UserSession.instance.displayName;
     final String message =
-        'EAWS EMERGENCY SOS! CitizenEbenezar triggered alert. Location: Lat ${lat.toStringAsFixed(5)}, Lng ${lng.toStringAsFixed(5)} (https://maps.google.com/?q=$lat,$lng)';
+        'EAWS EMERGENCY SOS! $userName has triggered an emergency alert. Location: Lat ${lat.toStringAsFixed(5)}, Lng ${lng.toStringAsFixed(5)} (https://maps.google.com/?q=$lat,$lng). Please respond immediately.';
 
     // Include 112 + all saved emergency contacts (stripped of spaces for iOS compatibility)
     String separator = Platform.isAndroid ? ';' : ',';
@@ -654,36 +707,10 @@ class _SOSScreenState extends State<SOSScreen> with TickerProviderStateMixin {
 
   // Layout 1: Personal Safety Intelligence Dashboard
   Widget _buildInactiveLayout() {
-    // Mock historical data — replace with Supabase query once backend is ready
-    final List<Map<String, dynamic>> _history = [
-      {
-        'type': 'Police / Threat',
-        'emoji': '👮',
-        'date': '2 days ago',
-        'status': 'Resolved',
-        'statusColor': AppTheme.successColor,
-        'responseTime': '4.2 mins',
-        'location': 'East Legon, Accra',
-      },
-      {
-        'type': 'Medical Aid',
-        'emoji': '🚑',
-        'date': '11 days ago',
-        'status': 'False Alarm',
-        'statusColor': AppTheme.warningColor,
-        'responseTime': '—',
-        'location': 'Cantonments, Accra',
-      },
-      {
-        'type': 'Fire Rescue',
-        'emoji': '🔥',
-        'date': '23 days ago',
-        'status': 'Resolved',
-        'statusColor': AppTheme.successColor,
-        'responseTime': '7.1 mins',
-        'location': 'Tema, Greater Accra',
-      },
-    ];
+    // Load per-user SOS history from UserDataStore
+    // Shown in initState via _sosHistory state field
+
+
 
     return Scaffold(
       backgroundColor: AppTheme.backgroundColor,
@@ -938,7 +965,7 @@ class _SOSScreenState extends State<SOSScreen> with TickerProviderStateMixin {
                   Expanded(
                     child: _buildAnalyticsCard(
                       'Last Emergency',
-                      '2 days ago',
+                      _sosHistory.isEmpty ? 'None' : (_sosHistory.first['date'] ?? 'Just now'),
                       LucideIcons.clock,
                       const Color(0xFFF0FDF4),
                       AppTheme.successColor,
@@ -959,7 +986,7 @@ class _SOSScreenState extends State<SOSScreen> with TickerProviderStateMixin {
                 ),
               ),
               const SizedBox(height: 12),
-              if (_history.isEmpty)
+              if (_sosHistory.isEmpty)
                 Container(
                   padding: const EdgeInsets.all(24),
                   decoration: BoxDecoration(
@@ -968,13 +995,14 @@ class _SOSScreenState extends State<SOSScreen> with TickerProviderStateMixin {
                   ),
                   child: const Center(
                     child: Text(
-                      'No emergency history yet.',
+                      'No emergency history yet. Your SOS activations will appear here.',
+                      textAlign: TextAlign.center,
                       style: TextStyle(color: AppTheme.textSecondary),
                     ),
                   ),
                 )
               else
-                ..._history
+                ..._sosHistory
                     .map(
                       (item) => Padding(
                         padding: const EdgeInsets.only(bottom: 12),
@@ -1073,7 +1101,7 @@ class _SOSScreenState extends State<SOSScreen> with TickerProviderStateMixin {
                         ),
                       ),
                     )
-                    .toList(),
+                    ,
               const SizedBox(height: 28),
 
               // ── 4. Silent Threat Mode ─────────────────────────────────────

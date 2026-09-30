@@ -26,13 +26,11 @@ class _RegisterScreenState extends State<RegisterScreen> {
   bool _agreedToTerms = false;
   
   File? _ghanaCardImage;
-  File? _selfieImage;
   final ImagePicker _picker = ImagePicker();
 
   // Selected Country Prefix Code State
   String _selectedCountryCode = '+233';
   String _selectedCountryIso = 'gh';
-  String _selectedCountryName = 'Ghana';
 
   @override
   void dispose() {
@@ -47,7 +45,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
 
   // West African Country Prefix Code Sheet
   void _showCountryPicker() {
-    final WestAfricanCountries = [
+    final westAfricanCountries = [
       {'name': 'Ghana', 'code': '+233', 'iso': 'gh'},
       {'name': 'Nigeria', 'code': '+234', 'iso': 'ng'},
       {'name': 'Sierra Leone', 'code': '+232', 'iso': 'sl'},
@@ -90,7 +88,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
               ),
               const SizedBox(height: 12),
               Column(
-                children: WestAfricanCountries.map((country) {
+                children: westAfricanCountries.map((country) {
                   return ListTile(
                     contentPadding: EdgeInsets.zero,
                     leading: ClipRRect(
@@ -125,7 +123,6 @@ class _RegisterScreenState extends State<RegisterScreen> {
                       setState(() {
                         _selectedCountryCode = country['code']!;
                         _selectedCountryIso = country['iso']!;
-                        _selectedCountryName = country['name']!;
                       });
                       Navigator.pop(context);
                     },
@@ -200,7 +197,6 @@ class _RegisterScreenState extends State<RegisterScreen> {
         if (mounted) {
           Navigator.pop(context); // Close loading indicator
           setState(() {
-            _selfieImage = File(image.path);
             _livenessVerified = true;
           });
           ScaffoldMessenger.of(context).showSnackBar(
@@ -271,12 +267,12 @@ class _RegisterScreenState extends State<RegisterScreen> {
       ghanaCard: _ghanaCardController.text.trim(),
     );
 
-    if (context.mounted) {
+    if (mounted) {
       Navigator.pop(context); // Close loading dialog
     }
 
     if (success) {
-      if (context.mounted) {
+      if (mounted) {
         // Send OTP (simulated/real) to the provided phone number
         await AuthService.instance.sendOTP('$_selectedCountryCode${_phoneController.text.trim()}');
 
@@ -332,11 +328,11 @@ class _RegisterScreenState extends State<RegisterScreen> {
                                 '$_selectedCountryCode${_phoneController.text.trim()}',
                                 code,
                               );
-                              if (valid && context.mounted) {
+                              if (valid && mounted) {
                                 Navigator.pop(context, true);
                               } else {
                                 setDialogState(() => isVerifying = false);
-                                if (context.mounted) {
+                                if (mounted) {
                                   ScaffoldMessenger.of(context).showSnackBar(
                                     const SnackBar(content: Text('Invalid code. Try 123456.'), backgroundColor: AppTheme.errorColor),
                                   );
@@ -354,7 +350,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
           },
         );
 
-        if (otpVerified == true && context.mounted) {
+        if (otpVerified == true && mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
             const SnackBar(
               content: Row(
@@ -377,7 +373,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
         } else {
            // User cancelled OTP or failed, sign them out so they can try again or wait
            await AuthService.instance.signOut();
-           if (context.mounted) {
+           if (mounted) {
              _showError('Registration incomplete. Phone number was not verified.');
            }
         }
@@ -422,7 +418,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
                         child: Container(
                           padding: const EdgeInsets.all(8),
                           decoration: BoxDecoration(
-                            color: Colors.white.withOpacity(0.2),
+                            color: Colors.white.withValues(alpha: 0.2),
                             shape: BoxShape.circle,
                           ),
                           child: const Icon(
@@ -625,7 +621,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
                                 margin: const EdgeInsets.all(8),
                                 padding: const EdgeInsets.all(8),
                                 decoration: BoxDecoration(
-                                  color: AppTheme.primaryColor.withOpacity(0.08),
+                                  color: AppTheme.primaryColor.withValues(alpha: 0.08),
                                   borderRadius: BorderRadius.circular(8),
                                 ),
                                 child: const Icon(

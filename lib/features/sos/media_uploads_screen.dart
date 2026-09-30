@@ -230,7 +230,7 @@ class _MediaUploadsScreenState extends State<MediaUploadsScreen> {
                             fontSize: 15,
                           ),
                         ),
-                        const SizedBox(height: 4),
+                        SizedBox(height: 4),
                         Text(
                           'Photos and videos captured during an SOS event are automatically uploaded to emergency responders.',
                           style: TextStyle(

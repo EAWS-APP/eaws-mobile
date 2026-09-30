@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:lucide_icons/lucide_icons.dart';
 import '../../core/theme.dart';
 import '../../core/eaws_logo.dart';
+import '../../core/user_session.dart';
 import '../dashboard/dashboard_screen.dart';
 import 'register_screen.dart';
 import 'phone_login_screen.dart';
@@ -87,6 +88,8 @@ class _LoginScreenState extends State<LoginScreen> {
           );
         }
       } else {
+        // Load and cache the real user name before entering the app
+        await UserSession.instance.load(force: true);
         if (context.mounted) {
           Navigator.pushReplacement(
             context,

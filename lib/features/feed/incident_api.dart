@@ -17,10 +17,10 @@ class IncidentApi {
       '/incidents/feed',
       query: {
         if (category != null && category != 'All') 'category': category,
-        if (severity != null) 'severity': severity,
-        if (distanceKm != null) 'distance_km': distanceKm.toStringAsFixed(1),
-        if (timeRange != null) 'time_range': timeRange,
-        if (sort != null) 'sort': sort,
+        'severity': ?severity,
+        if (distanceKm != null) 'distanceKm': distanceKm.toStringAsFixed(1),
+        'time_range': ?timeRange,
+        if (sort != null) 'sort': _feedSortKey(sort),
       },
     );
 
@@ -49,12 +49,32 @@ class IncidentApi {
         'location_name': locationName,
         'latitude': latitude,
         'longitude': longitude,
-        if (mediaUrl != null) 'media_url': mediaUrl,
-        if (mediaType != null) 'media_type': mediaType,
       },
     );
 
-    return Incident.fromJson(Map<String, dynamic>.from(data['incident'] ?? data));
+    final rawIncident = Map<String, dynamic>.from(data['incident'] ?? data);
+
+    if (mediaUrl != null) {
+      try {
+        await EawsApiClient.instance.post(
+          '/incidents/${rawIncident['id']}/media',
+          body: {
+            'media_type': mediaType ?? 'image',
+            'storage_bucket': 'reports',
+            'storage_path': 'mobile_${DateTime.now().millisecondsSinceEpoch}',
+            'file_url': mediaUrl,
+          },
+        );
+      } catch (e) {
+        print('EAWS media attachment failed, keeping incident without media attachment: $e');
+      }
+    }
+
+    return Incident.fromJson({
+      ...rawIncident,
+      'media_url': ?mediaUrl,
+      'media_type': ?mediaType,
+    });
   }
 
   Future<void> deleteIncident(String id) {
@@ -67,11 +87,85 @@ class IncidentApi {
   }
 
   Future<void> react(String id, String type) async {
-    await EawsApiClient.instance.post('/community/incidents/$id/reactions', body: {'type': type});
+    await EawsApiClient.instance.post('/community/incidents/$id/reactions', body: {'reaction_type': type});
   }
 
   Future<void> addComment(String id, String content) async {
     await EawsApiClient.instance.post('/community/incidents/$id/comments', body: {'content': content});
   }
-}
 
+  Future<List<Map<String, dynamic>>> getComments(String id) async {
+    final data = await EawsApiClient.instance.get('/community/incidents/$id/comments');
+    final items = data is List ? data : (data['comments'] as List? ?? []);
+    return items.map((item) => Map<String, dynamic>.from(item as Map)).toList();
+  }
+
+  String _feedSortKey(String sort) {
+    switch (sort.toLowerCase()) {
+      case 'most reactions':
+      case 'popular':
+        return 'popular';
+      default:
+        return 'recent';
+    }
+  }
+
+  // ── Community Posts (free-form, not incidents) ──────────────────────────────
+
+  Future<List<Map<String, dynamic>>> getCommunityPosts() async {
+    try {
+      final data = await EawsApiClient.instance.get('/community/posts');
+      final items = data is List ? data : (data['posts'] as List? ?? []);
+      return items.map((item) => Map<String, dynamic>.from(item as Map)).toList();
+    } catch (e) {
+      print('EAWS Community Posts fetch failed: $e');
+      return [];
+    }
+  }
+
+  Future<Map<String, dynamic>> createCommunityPost({
+    required String content,
+    String? imageUrl,
+  }) async {
+    final data = await EawsApiClient.instance.post(
+      '/community/posts',
+      body: {
+        'content': content,
+        'image_url': ?imageUrl,
+      },
+    );
+    return Map<String, dynamic>.from(data['post'] ?? data);
+  }
+
+  Future<Map<String, dynamic>> addReply(String postId, String content) async {
+    final data = await EawsApiClient.instance.post(
+      '/community/posts/$postId/replies',
+      body: {'content': content},
+    );
+    return Map<String, dynamic>.from(data['reply'] ?? data);
+  }
+
+  // ── Direct Messages (Citizen ↔ Control Room) ─────────────────────────────────
+
+  Future<List<Map<String, dynamic>>> getMessages(String citizenId) async {
+    try {
+      final data = await EawsApiClient.instance.get('/messages/$citizenId');
+      final items = data is List ? data : (data['messages'] as List? ?? []);
+      return items.map((item) => Map<String, dynamic>.from(item as Map)).toList();
+    } catch (e) {
+      print('EAWS Messages fetch failed: $e');
+      return [];
+    }
+  }
+
+  Future<Map<String, dynamic>> sendMessage(String citizenId, String text, {String? mediaUrl}) async {
+    final data = await EawsApiClient.instance.post(
+      '/messages/$citizenId',
+      body: {
+        'text': text,
+        'media_url': ?mediaUrl,
+      },
+    );
+    return Map<String, dynamic>.from(data['message'] ?? data ?? {});
+  }
+}

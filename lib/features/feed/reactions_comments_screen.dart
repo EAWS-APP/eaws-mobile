@@ -2,8 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:lucide_icons/lucide_icons.dart';
 import '../../core/theme.dart';
+import '../../core/user_session.dart';
 import 'incident_api.dart';
-import 'community_feed_screen.dart';
 
 class ReactionsCommentsScreen extends StatefulWidget {
   final Map<String, dynamic> report;
@@ -82,6 +82,7 @@ class _ReactionsCommentsScreenState extends State<ReactionsCommentsScreen> {
   void initState() {
     super.initState();
     _localReport = Map<String, dynamic>.from(widget.report);
+    _loadRemoteComments();
   }
 
   @override
@@ -99,8 +100,8 @@ class _ReactionsCommentsScreenState extends State<ReactionsCommentsScreen> {
 
     final newComment = {
       'id': DateTime.now().millisecondsSinceEpoch,
-      'userName': 'Ghana Citizen',
-      'initials': 'GC',
+      'userName': UserSession.instance.displayName,
+      'initials': UserSession.instance.initials,
       'avatarColor': AppTheme.primaryColor,
       'isVerified': true,
       'timeAgo': 'Just now',
@@ -122,6 +123,7 @@ class _ReactionsCommentsScreenState extends State<ReactionsCommentsScreen> {
 
     try {
       await IncidentApi.instance.addComment(_localReport['id'].toString(), text);
+      await _loadRemoteComments();
     } catch (e) {
       print('EAWS Comment API unavailable, keeping local comment: $e');
     }
@@ -170,12 +172,12 @@ class _ReactionsCommentsScreenState extends State<ReactionsCommentsScreen> {
     }
   }
 
-  void _toggleCommentLike(int commentId) {
+  void _toggleCommentLike(dynamic commentId) {
     HapticFeedback.lightImpact();
     setState(() {
       final List<Map<String, dynamic>> commentsList = 
           _localReport['comments'] is List ? List<Map<String, dynamic>>.from(_localReport['comments']) : [];
-      final idx = commentsList.indexWhere((c) => c['id'] == commentId);
+      final idx = commentsList.indexWhere((c) => c['id'].toString() == commentId.toString());
       if (idx != -1) {
         final comment = commentsList[idx];
         final bool isLiked = comment['isLiked'] ?? false;
@@ -187,10 +189,10 @@ class _ReactionsCommentsScreenState extends State<ReactionsCommentsScreen> {
     widget.onUpdate(_localReport);
   }
 
-  void _editComment(int commentId) async {
+  void _editComment(dynamic commentId) async {
     final List<Map<String, dynamic>> commentsList = 
         _localReport['comments'] is List ? List<Map<String, dynamic>>.from(_localReport['comments']) : [];
-    final idx = commentsList.indexWhere((c) => c['id'] == commentId);
+    final idx = commentsList.indexWhere((c) => c['id'].toString() == commentId.toString());
     if (idx != -1) {
       final result = await showDialog<String>(
         context: context,
@@ -208,16 +210,73 @@ class _ReactionsCommentsScreenState extends State<ReactionsCommentsScreen> {
     }
   }
 
-  void _deleteComment(int commentId) {
+  void _deleteComment(dynamic commentId) {
     HapticFeedback.heavyImpact();
     setState(() {
       final List<Map<String, dynamic>> commentsList = 
           _localReport['comments'] is List ? List<Map<String, dynamic>>.from(_localReport['comments']) : [];
-      commentsList.removeWhere((c) => c['id'] == commentId);
+      commentsList.removeWhere((c) => c['id'].toString() == commentId.toString());
       _localReport['comments'] = commentsList;
       _localReport['commentsCount'] = commentsList.length;
     });
     widget.onUpdate(_localReport);
+  }
+
+  Future<void> _loadRemoteComments() async {
+    try {
+      final remoteComments = await IncidentApi.instance.getComments(_localReport['id'].toString());
+      if (!mounted) return;
+
+      final mappedComments = remoteComments.map(_commentToUiMap).toList();
+      setState(() {
+        _localReport['comments'] = mappedComments;
+        _localReport['commentsCount'] = mappedComments.length;
+      });
+      widget.onUpdate(_localReport);
+    } catch (e) {
+      print('EAWS Comments API unavailable, keeping local comments: $e');
+    }
+  }
+
+  Map<String, dynamic> _commentToUiMap(Map<String, dynamic> comment) {
+    final profile = comment['user_profile'];
+    final profileMap = profile is Map ? profile : null;
+    final role = profileMap?['user_role']?.toString().toLowerCase();
+    final displayName = (profileMap?['full_name'] ?? comment['user_name'] ?? UserSession.instance.displayName).toString();
+    final isVerified = role != null && role != 'citizen';
+
+    return {
+      'id': comment['id'] ?? DateTime.now().microsecondsSinceEpoch,
+      'userId': comment['user_id']?.toString(),
+      'userName': displayName,
+      'initials': _initials(displayName),
+      'avatarColor': isVerified ? AppTheme.primaryColor : Colors.grey,
+      'isVerified': isVerified,
+      'timeAgo': _timeAgo(DateTime.tryParse((comment['created_at'] ?? '').toString()) ?? DateTime.now()),
+      'content': (comment['content'] ?? '').toString(),
+      'likes': _asInt(comment['likes_count']),
+      'isLiked': false,
+    };
+  }
+
+  int _asInt(dynamic value) {
+    if (value is num) return value.toInt();
+    return int.tryParse(value?.toString() ?? '') ?? 0;
+  }
+
+  String _initials(String name) {
+    final parts = name.trim().split(RegExp(r'\s+')).where((part) => part.isNotEmpty).toList();
+    if (parts.isEmpty) return 'GC';
+    if (parts.length == 1) return parts.first[0].toUpperCase();
+    return '${parts.first[0]}${parts.last[0]}'.toUpperCase();
+  }
+
+  String _timeAgo(DateTime dateTime) {
+    final delta = DateTime.now().difference(dateTime);
+    if (delta.inMinutes < 1) return 'Just now';
+    if (delta.inMinutes < 60) return '${delta.inMinutes} min ago';
+    if (delta.inHours < 24) return '${delta.inHours} hr ago';
+    return '${delta.inDays} days ago';
   }
 
   @override
@@ -478,7 +537,7 @@ class _ReactionsCommentsScreenState extends State<ReactionsCommentsScreen> {
                       itemBuilder: (context, index) {
                         final comment = comments[index];
                         final bool isCommentLiked = comment['isLiked'] ?? false;
-                        final bool isMyComment = comment['userName'] == 'Ghana Citizen';
+                        final bool isMyComment = comment['userName'] == UserSession.instance.displayName || comment['userName'] == 'Ghana Citizen';
 
                         return Container(
                           margin: const EdgeInsets.only(bottom: 12),

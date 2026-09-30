@@ -50,6 +50,8 @@ dependencies:
   google_maps_flutter: ^2.17.1
   map_launcher: ^4.5.0
   permission_handler: ^12.0.3
+  record: ^6.2.1
+  video_player: ^2.9.2
 
 dev_dependencies:
   flutter_test:
@@ -103,3 +105,5 @@ flutter:
   #
   # For details regarding fonts from package dependencies,
   # see https://flutter.dev/to/font-from-package
+
+

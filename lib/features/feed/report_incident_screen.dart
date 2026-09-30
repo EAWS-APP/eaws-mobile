@@ -7,6 +7,8 @@ import 'dart:io';
 import 'package:image_picker/image_picker.dart';
 import 'package:device_info_plus/device_info_plus.dart';
 import '../../core/theme.dart';
+import '../../core/user_session.dart';
+import '../../core/user_data_store.dart';
 import 'community_feed_screen.dart';
 import 'incident_api.dart';
 
@@ -444,9 +446,9 @@ class _ReportIncidentScreenState extends State<ReportIncidentScreen> {
       // Build the dynamic new card model while the backend route is still coming online.
       newReport = {
         'id': DateTime.now().millisecondsSinceEpoch,
-        'userId': 'user_12345',
-        'userName': _isAnonymous ? 'Anonymous Citizen' : 'Ghana Citizen',
-        'initials': _isAnonymous ? 'AC' : 'GC',
+        'userId': UserDataStore.instance.userKey,
+        'userName': _isAnonymous ? 'Anonymous Citizen' : UserSession.instance.displayName,
+        'initials': _isAnonymous ? 'AC' : UserSession.instance.initials,
         'avatarColor': _isAnonymous ? Colors.grey : AppTheme.primaryColor,
         'isVerified': !_isAnonymous,
         'timeAgo': 'Just now',
@@ -467,6 +469,9 @@ class _ReportIncidentScreenState extends State<ReportIncidentScreen> {
         'isLiked': false,
       };
     }
+
+    // Save report into user's isolated database store
+    await UserDataStore.instance.saveUserReport(newReport);
 
     // Prepend to dynamic list
     final List<Map<String, dynamic>> currentReports = List.from(communityReportsNotifier.value);
@@ -545,8 +550,9 @@ class _ReportIncidentScreenState extends State<ReportIncidentScreen> {
               scrollDirection: Axis.horizontal,
               physics: const BouncingScrollPhysics(),
               child: Row(
-                children: ['Flood', 'Fire', 'Medical', 'Suspicious', 'Other'].map((type) {
+                 children: ['Flood', 'Fire', 'Medical', 'Suspicious', 'Other'].map((type) {
                   final isSelected = _selectedIncidentType == type;
+                  final displayLabel = type == 'Other' ? 'Other (type below)' : type;
                   return Padding(
                     padding: const EdgeInsets.only(right: 8.0),
                     child: ElevatedButton.icon(
@@ -566,7 +572,7 @@ class _ReportIncidentScreenState extends State<ReportIncidentScreen> {
                                     : (type == 'Suspicious' ? LucideIcons.eyeOff : LucideIcons.moreHorizontal))),
                         size: 16,
                       ),
-                      label: Text(type),
+                      label: Text(displayLabel),
                       style: ElevatedButton.styleFrom(
                         backgroundColor: isSelected ? AppTheme.primaryColor : Colors.white,
                         foregroundColor: isSelected ? Colors.white : AppTheme.textSecondary,

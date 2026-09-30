@@ -1,14 +1,16 @@
 import 'package:supabase_flutter/supabase_flutter.dart';
+import '../../core/user_session.dart';
+import '../../core/user_data_store.dart';
 
 class ProfileData {
-  static String fullName = 'John Doe';
-  static String email = 'john.doe@email.com';
-  static String phone = '+1 555 000 1234';
-  static String dob = '01 Jan 1990';
+  static String fullName = UserSession.instance.displayName;
+  static String email = UserSession.instance.email ?? 'kwame.asante@eaws.gov.gh';
+  static String phone = UserSession.instance.phone ?? '+233 26 123 4567';
+  static String dob = '15 Mar 1992';
   
   static String bloodType = 'O+';
   static String medicalConditions = 'None listed';
-  static String homeAddress = '123 Main St, Singapore';
+  static String homeAddress = 'Accra, Ghana';
   
   // Recommended premium emergency fields
   static String allergies = 'None listed';
@@ -16,7 +18,7 @@ class ProfileData {
   static String communicationPreference = 'Voice & Text';
 
   static String get initials {
-    if (fullName.isEmpty) return 'JD';
+    if (fullName.isEmpty) return 'KA';
     final parts = fullName.trim().split(' ');
     if (parts.length >= 2) {
       return '${parts[0][0]}${parts[1][0]}'.toUpperCase();
@@ -24,34 +26,60 @@ class ProfileData {
     return parts[0][0].toUpperCase();
   }
 
-  // Load from Supabase user session if active
-  static void loadFromSession() {
+  /// Load from per-user isolated database store
+  static Future<void> loadFromSession() async {
     try {
+      // 1. Load active user session name & contact details
+      fullName = UserSession.instance.displayName;
+      if (UserSession.instance.email != null) email = UserSession.instance.email!;
+      if (UserSession.instance.phone != null) phone = UserSession.instance.phone!;
+
+      // 2. Load per-user profile bio data from UserDataStore
+      final profile = await UserDataStore.instance.loadUserProfile();
+      fullName = profile['fullName'] ?? fullName;
+      email = profile['email'] ?? email;
+      phone = profile['phone'] ?? phone;
+      dob = profile['dob'] ?? dob;
+      bloodType = profile['bloodType'] ?? bloodType;
+      medicalConditions = profile['medicalConditions'] ?? medicalConditions;
+      homeAddress = profile['homeAddress'] ?? homeAddress;
+      allergies = profile['allergies'] ?? allergies;
+      medications = profile['medications'] ?? medications;
+      communicationPreference = profile['communicationPreference'] ?? communicationPreference;
+
+      // 3. Sync with active Supabase user metadata if connected
       final user = Supabase.instance.client.auth.currentUser;
       if (user != null) {
         fullName = user.userMetadata?['full_name'] ?? fullName;
         phone = user.userMetadata?['phone_number'] ?? user.phone ?? phone;
         email = user.email ?? email;
-        
-        // Custom emergency fields stored in metadata
-        dob = user.userMetadata?['dob'] ?? dob;
-        bloodType = user.userMetadata?['blood_type'] ?? bloodType;
-        medicalConditions = user.userMetadata?['medical_conditions'] ?? medicalConditions;
-        homeAddress = user.userMetadata?['home_address'] ?? homeAddress;
-        
-        // Load recommended fields
-        allergies = user.userMetadata?['allergies'] ?? allergies;
-        medications = user.userMetadata?['medications'] ?? medications;
-        communicationPreference = user.userMetadata?['communication_preference'] ?? communicationPreference;
       }
     } catch (e) {
       print('EAWS Profile Load Error: $e');
     }
   }
 
-  // Save to Supabase and update active session metadata
+  /// Save to per-user database store and update active session
   static Future<bool> saveToSession() async {
     try {
+      // Save to per-user isolated storage
+      await UserDataStore.instance.saveUserProfile({
+        'fullName': fullName,
+        'email': email,
+        'phone': phone,
+        'dob': dob,
+        'bloodType': bloodType,
+        'medicalConditions': medicalConditions,
+        'homeAddress': homeAddress,
+        'allergies': allergies,
+        'medications': medications,
+        'communicationPreference': communicationPreference,
+      });
+
+      // Update UserSession
+      UserSession.instance.setDisplayName(fullName, email: email, phone: phone);
+
+      // Save to Supabase Auth if connected
       final client = Supabase.instance.client;
       if (client.auth.currentUser != null) {
         await client.auth.updateUser(
@@ -69,9 +97,8 @@ class ProfileData {
             },
           ),
         );
-        return true;
       }
-      return true; // Return true as simulation success if no network
+      return true;
     } catch (e) {
       print('EAWS Profile Save Error: $e');
       return false;

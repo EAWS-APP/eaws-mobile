@@ -47,9 +47,19 @@ class EawsApiClient {
       final request = await client.openUrl(method, uri);
       request.headers.set(HttpHeaders.acceptHeader, 'application/json');
       request.headers.set(HttpHeaders.contentTypeHeader, 'application/json');
+      // Use real Supabase token if logged in; otherwise fall back to user-specific mock token
+      // so the backend can resolve the correct registered name from its user registry.
+      String token;
       if (session?.accessToken != null) {
-        request.headers.set(HttpHeaders.authorizationHeader, 'Bearer ${session!.accessToken}');
+        token = session!.accessToken;
+      } else {
+        // Embed the user's email in the mock token so the server's resolveAuthorName()
+        // can look up their real full name (e.g. kwame@eaws.gov.gh → Kwame Asante).
+        final userEmail = Supabase.instance.client.auth.currentUser?.email
+            ?? 'kwame@eaws.gov.gh';
+        token = 'mock-token-$userEmail';
       }
+      request.headers.set(HttpHeaders.authorizationHeader, 'Bearer $token');
 
       if (body != null) {
         request.write(jsonEncode(body));

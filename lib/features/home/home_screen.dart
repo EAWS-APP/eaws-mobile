@@ -10,7 +10,7 @@ import 'package:geolocator/geolocator.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
 import 'package:map_launcher/map_launcher.dart' as ml;
 import '../../core/theme.dart';
-import '../auth/auth_service.dart';
+import '../../core/user_session.dart';
 import '../sos/sos_screen.dart';
 import '../feed/report_incident_screen.dart';
 import 'package:flutter_contacts/flutter_contacts.dart';
@@ -20,6 +20,7 @@ import 'package:permission_handler/permission_handler.dart' hide PermissionStatu
 import 'models/alert_model.dart';
 import 'models/safe_zone_model.dart';
 import 'services/home_service.dart';
+import '../profile/messages_screen.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -58,6 +59,9 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
   StreamSubscription<List<ConnectivityResult>>? _connectivitySubscription;
   bool _isOffline = false;
 
+  // Resolved display name for greeting (fetched asynchronously)
+  String _displayName = UserSession.instance.displayName;
+
   @override
   void initState() {
     super.initState();
@@ -91,6 +95,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
     _initConnectivity();
     _initLocationService();
     _loadAlertsAndZones();
+    _loadDisplayName();
   }
 
   void _initConnectivity() {
@@ -528,7 +533,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                       const Icon(LucideIcons.navigation, color: AppTheme.primaryColor, size: 18),
                       const SizedBox(width: 10),
                       const Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [Text('Include GPS Coordinates', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13)), Text('Exact lat/long in message', style: TextStyle(color: AppTheme.textSecondary, fontSize: 11))])),
-                      Switch(value: includeGps, onChanged: (v) => setModalState(() => includeGps = v), activeColor: AppTheme.primaryColor),
+                      Switch(value: includeGps, onChanged: (v) => setModalState(() => includeGps = v), activeThumbColor: AppTheme.primaryColor),
                     ])),
                     const SizedBox(height: 24),
                     // Share button
@@ -571,9 +576,10 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
               try {
                 final permissionStatus = await FlutterContacts.permissions.request(PermissionType.readWrite);
                 if (permissionStatus == PermissionStatus.granted) {
-                  // showPicker returns a contact ID (String?), not a Contact
-                  final String? contactId = await FlutterContacts.native.showPicker();
-                  if (contactId != null) {
+                  final Contact? chosenContact = await FlutterContacts.native.showPicker();
+                  if (chosenContact != null) {
+                    final String? contactId = chosenContact.id;
+                    if (contactId == null) return;
                     // Fetch the full contact with phone numbers
                     final Contact? contact = await FlutterContacts.get(contactId, properties: {ContactProperty.phone});
                     if (contact == null) return;
@@ -1031,7 +1037,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                       controller: scrollController,
                       padding: const EdgeInsets.symmetric(horizontal: 24),
                       itemCount: _safeZones.length,
-                      separatorBuilder: (_, __) => const Divider(height: 1, color: Color(0xFFE5E7EB)),
+                      separatorBuilder: (_, _) => const Divider(height: 1, color: Color(0xFFE5E7EB)),
                       itemBuilder: (context, i) {
                         final zone = _safeZones[i];
                         final distKm = zone.distanceFrom(_latitude, _longitude);
@@ -1308,13 +1314,23 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
     );
   }
 
+  /// Loads the best available display name from UserSession and updates state.
+  Future<void> _loadDisplayName() async {
+    // UserSession was already loaded at login — this just refreshes the UI state
+    await UserSession.instance.load();
+    if (mounted) {
+      setState(() {
+        _displayName = UserSession.instance.displayName;
+      });
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
-
-    final String userPhone = AuthService.instance.currentUserPhone ?? '+233 26 624 1278';
-    // Clean formatted welcome label (phone number summary)
-    final String formattedUser = userPhone.length > 8 ? userPhone.substring(0, 7) + '...' : userPhone;
-    final String displayName = AuthService.instance.currentUserName ?? formattedUser;
+    // Priority: Active UserSession.instance.displayName
+    final String displayName = UserSession.instance.displayName.isNotEmpty && UserSession.instance.displayName != 'Citizen'
+        ? UserSession.instance.displayName
+        : (_displayName.isNotEmpty && _displayName != 'Citizen' && _displayName != 'Loading...' ? _displayName : 'Kwame Asante');
 
     return Scaffold(
       backgroundColor: AppTheme.backgroundColor,
@@ -1862,7 +1878,25 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
               ),
             ),
             const SizedBox(width: 16),
-            
+
+            // Messages icon — opens citizen inbox
+            GestureDetector(
+              onTap: () {
+                HapticFeedback.lightImpact();
+                Navigator.push(context, MaterialPageRoute(builder: (_) => const MessagesScreen()));
+              },
+              child: Container(
+                padding: const EdgeInsets.all(10),
+                decoration: BoxDecoration(
+                  color: Colors.white.withOpacity(0.2),
+                  shape: BoxShape.circle,
+                ),
+                child: const Icon(LucideIcons.messageCircle, color: Colors.white, size: 22),
+              ),
+            ),
+
+            const SizedBox(width: 8),
+
             // Notifications bell trigger
             GestureDetector(
               onTap: _showNotificationsSheet,
@@ -1907,7 +1941,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
     return GestureDetector(
       onTap: onTap,
       child: Container(
-        padding: const EdgeInsets.all(16),
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
         decoration: BoxDecoration(
           color: Colors.white,
           borderRadius: BorderRadius.circular(16),
@@ -1924,17 +1958,17 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
             Container(
-              padding: const EdgeInsets.all(10),
+              padding: const EdgeInsets.all(8),
               decoration: BoxDecoration(
                 color: bgColor,
                 shape: BoxShape.circle,
               ),
-              child: Icon(icon, color: iconColor),
+              child: Icon(icon, color: iconColor, size: 20),
             ),
-            const SizedBox(height: 16),
-            Text(title, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14)),
-            const SizedBox(height: 4),
-            Text(subtitle, style: const TextStyle(color: AppTheme.textSecondary, fontSize: 12)),
+            const SizedBox(height: 10),
+            Text(title, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13), maxLines: 1, overflow: TextOverflow.ellipsis),
+            const SizedBox(height: 2),
+            Text(subtitle, style: const TextStyle(color: AppTheme.textSecondary, fontSize: 11), maxLines: 1, overflow: TextOverflow.ellipsis),
           ],
         ),
       ),

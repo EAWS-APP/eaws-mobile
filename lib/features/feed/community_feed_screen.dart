@@ -15,57 +15,157 @@ import 'incident_api.dart';
 // Shared in-memory list of reports to support real-time dynamic posting during runtime
 final ValueNotifier<List<Map<String, dynamic>>> communityReportsNotifier = ValueNotifier<List<Map<String, dynamic>>>([
   {
-    'id': 1,
-    'userName': 'Kwame Mensah',
-    'initials': 'KM',
+    'id': 'inc-1',
+    'userName': 'Kwame Asante',
+    'initials': 'KA',
     'avatarColor': const Color(0xFFEF4444),
     'isVerified': true,
     'timeAgo': '2 min ago',
+    'createdAt': DateTime.now().subtract(const Duration(minutes: 2)).toIso8601String(),
     'category': 'FLOOD',
     'categoryColor': const Color(0xFFEF4444),
     'title': 'Rising water levels on Liberation Road',
     'description': 'Water has reached knee level near the traffic light. Avoid the area and seek alternative bypass routes.',
-    'imageAsset': 'assets/images/flood.jpg', // we will use fallback beautiful network image or elegant UI card
+    'imageAsset': 'https://images.unsplash.com/photo-1547683905-f686c993aae5?w=600&auto=format&fit=crop',
     'severity': 'CRITICAL',
-    'location': 'Accra, Ghana',
+    'location': 'Liberation Road, Accra',
     'likes': 24,
-    'comments': 8,
+    'commentsCount': 1,
     'isLiked': false,
   },
   {
-    'id': 2,
-    'userName': 'Ama Boateng',
+    'id': 'cp-001',
+    'post_type': 'community',
+    'userName': 'D. Harrison',
+    'initials': 'DH',
+    'avatarColor': const Color(0xFF8B5CF6),
+    'isVerified': true,
+    'timeAgo': '8 min ago',
+    'createdAt': DateTime.now().subtract(const Duration(minutes: 8)).toIso8601String(),
+    'category': 'COMMUNITY',
+    'categoryColor': const Color(0xFF8B5CF6),
+    'title': 'Anyone else notice the traffic is really bad on the N1 highway this morning? Took me 45 minutes from Spintex to Accra Mall. Stay safe out there everyone 🙏',
+    'description': '',
+    'content': 'Anyone else notice the traffic is really bad on the N1 highway this morning? Took me 45 minutes from Spintex to Accra Mall. Stay safe out there everyone 🙏',
+    'severity': 'COMMUNITY',
+    'location': 'Accra, Ghana',
+    'likes': 7,
+    'commentsCount': 2,
+    'isLiked': false,
+  },
+  {
+    'id': 'inc-2',
+    'userName': 'Ama Serwaa Boateng',
     'initials': 'AB',
     'avatarColor': const Color(0xFFF59E0B),
     'isVerified': true,
     'timeAgo': '15 min ago',
+    'createdAt': DateTime.now().subtract(const Duration(minutes: 15)).toIso8601String(),
     'category': 'FIRE',
     'categoryColor': const Color(0xFFF59E0B),
     'title': 'Bushfire spotted near Achimota Forest',
     'description': 'Thick smoke visible from the main road. Fire service has been called and dispatchers are en-route.',
-    'imageAsset': 'assets/images/fire.jpg',
+    'imageAsset': 'https://images.unsplash.com/photo-1582213782179-e0d53f98f2ca?w=600&auto=format&fit=crop',
     'severity': 'WARNING',
-    'location': 'Achimota, Accra',
+    'location': 'Achimota Forest, Accra',
     'likes': 12,
-    'comments': 5,
+    'commentsCount': 0,
     'isLiked': false,
   },
   {
-    'id': 3,
-    'userName': 'Robert Doe',
-    'initials': 'RD',
-    'avatarColor': const Color(0xFF3B82F6),
+    'id': 'cp-002',
+    'post_type': 'community',
+    'userName': 'Kwame Asante',
+    'initials': 'KA',
+    'avatarColor': const Color(0xFF8B5CF6),
+    'isVerified': true,
+    'timeAgo': '35 min ago',
+    'createdAt': DateTime.now().subtract(const Duration(minutes: 35)).toIso8601String(),
+    'category': 'COMMUNITY',
+    'categoryColor': const Color(0xFF8B5CF6),
+    'title': 'Heads up: The Electricity Company is doing maintenance work in East Legon areas 12 and 13 today from 9am to 4pm. Power will be out. Charge your devices now! ⚡',
+    'description': '',
+    'content': 'Heads up: The Electricity Company is doing maintenance work in East Legon areas 12 and 13 today from 9am to 4pm. Power will be out. Charge your devices now! ⚡',
+    'severity': 'COMMUNITY',
+    'location': 'East Legon, Accra',
+    'likes': 21,
+    'commentsCount': 1,
+    'isLiked': false,
+  },
+  {
+    'id': 'INC-8829-X',
+    'userName': 'D. Harrison',
+    'initials': 'DH',
+    'avatarColor': const Color(0xFFEF4444),
+    'isVerified': true,
+    'timeAgo': '45 min ago',
+    'createdAt': DateTime.now().subtract(const Duration(minutes: 45)).toIso8601String(),
+    'category': 'FIRE',
+    'categoryColor': const Color(0xFFEF4444),
+    'title': 'Structure Fire - Makola Market',
+    'description': 'Large blaze reported in sector 3 of Makola Market. Multiple vendor structures involved.',
+    'imageAsset': 'https://images.unsplash.com/photo-1582213782179-e0d53f98f2ca?w=600&auto=format&fit=crop',
+    'severity': 'CRITICAL',
+    'location': 'Makola Market, Accra',
+    'likes': 5,
+    'commentsCount': 2,
+    'isLiked': false,
+  },
+  {
+    'id': 'INC-1209-A',
+    'userName': 'Abena Osei-Bonsu',
+    'initials': 'AO',
+    'avatarColor': const Color(0xFF10B981),
     'isVerified': true,
     'timeAgo': '1 hr ago',
+    'createdAt': DateTime.now().subtract(const Duration(hours: 1)).toIso8601String(),
+    'category': 'POLICE',
+    'categoryColor': const Color(0xFF10B981),
+    'title': 'Armed Robbery - East Legon',
+    'description': 'Suspects fled in a black sedan after residential break-in. Police unit dispatched.',
+    'imageAsset': null,
+    'severity': 'HIGH',
+    'location': 'East Legon, Accra',
+    'likes': 12,
+    'commentsCount': 1,
+    'isLiked': false,
+  },
+  {
+    'id': 'inc-3',
+    'userName': 'Nana Mensah',
+    'initials': 'NM',
+    'avatarColor': const Color(0xFF3B82F6),
+    'isVerified': true,
+    'timeAgo': '3 hrs ago',
+    'createdAt': DateTime.now().subtract(const Duration(hours: 3)).toIso8601String(),
     'category': 'MEDICAL',
     'categoryColor': const Color(0xFF3B82F6),
     'title': 'Injured person near Tema Station',
     'description': 'Someone collapsed near the bus terminal. Ambulance has been contacted and is currently on the way.',
     'imageAsset': null,
     'severity': 'MEDIUM',
-    'location': 'Tema, Ghana',
+    'location': 'Tema Station, Accra',
     'likes': 6,
-    'comments': 2,
+    'commentsCount': 0,
+    'isLiked': false,
+  },
+  {
+    'id': 'INC-7701-J',
+    'userName': 'Jayden Spark',
+    'initials': 'JS',
+    'avatarColor': const Color(0xFF10B981),
+    'isVerified': true,
+    'timeAgo': '43 days ago',
+    'createdAt': DateTime.now().subtract(const Duration(days: 43)).toIso8601String(),
+    'category': 'POLICE',
+    'categoryColor': const Color(0xFF10B981),
+    'title': 'Suspicious Vehicle Activity - Osu RE',
+    'description': 'Unmarked vehicle lingering near commercial bank. Vehicle cleared by security team.',
+    'imageAsset': null,
+    'severity': 'MEDIUM',
+    'location': 'Osu RE, Accra',
+    'likes': 3,
+    'commentsCount': 0,
     'isLiked': false,
   },
 ]);
@@ -94,7 +194,7 @@ class _CommunityFeedScreenState extends State<CommunityFeedScreen> {
   void initState() {
     super.initState();
     _loadIncidentFeed();
-    _feedRefreshTimer = Timer.periodic(const Duration(seconds: 10), (_) => _loadIncidentFeed());
+    _feedRefreshTimer = Timer.periodic(const Duration(seconds: 3), (_) => _loadIncidentFeed());
   }
 
   @override
@@ -123,7 +223,7 @@ class _CommunityFeedScreenState extends State<CommunityFeedScreen> {
           .toSet();
 
       // Map incidents to UI cards
-      final incidentCards = (incidents as List).map((incident) {
+      final incidentCards = (incidents).map((incident) {
         final report = incident.toUiMap();
         report['isLiked'] = likedIds.contains(report['id'].toString());
         return report;
@@ -157,8 +257,15 @@ class _CommunityFeedScreenState extends State<CommunityFeedScreen> {
         };
       }).toList();
 
+      // Preserve pending local posts that haven't landed on the server yet
+      final remoteIds = [...incidentCards, ...postCards].map((r) => r['id'].toString()).toSet();
+      final pendingLocal = communityReportsNotifier.value.where((r) {
+        final idStr = r['id'].toString();
+        return (idStr.startsWith('cp-local-') || idStr.startsWith('inc-local-')) && !remoteIds.contains(idStr);
+      }).toList();
+
       // Merge and sort chronologically (newest first)
-      final List<Map<String, dynamic>> merged = List<Map<String, dynamic>>.from([...incidentCards, ...postCards]);
+      final List<Map<String, dynamic>> merged = List<Map<String, dynamic>>.from([...pendingLocal, ...incidentCards, ...postCards]);
       merged.sort((a, b) {
         final ta = DateTime.tryParse(a['createdAt']?.toString() ?? '') ?? DateTime(0);
         final tb = DateTime.tryParse(b['createdAt']?.toString() ?? '') ?? DateTime(0);
@@ -167,7 +274,7 @@ class _CommunityFeedScreenState extends State<CommunityFeedScreen> {
 
       communityReportsNotifier.value = merged;
     } catch (e) {
-      print('EAWS Feed API unavailable, keeping local mock feed: $e');
+      debugPrint('EAWS Feed API unavailable, keeping local mock feed: $e');
     }
   }
 
@@ -361,7 +468,7 @@ class _CommunityFeedScreenState extends State<CommunityFeedScreen> {
                               boxShadow: isSelected
                                   ? [
                                       BoxShadow(
-                                        color: AppTheme.primaryColor.withOpacity(0.15),
+                                        color: AppTheme.primaryColor.withValues(alpha: 0.15),
                                         blurRadius: 6,
                                         offset: const Offset(0, 2),
                                       )
@@ -601,127 +708,341 @@ class _CommunityFeedScreenState extends State<CommunityFeedScreen> {
     final bool isCommunity = report['post_type'] == 'community' ||
         report['category'].toString().toUpperCase() == 'COMMUNITY';
 
-    return Container(
-      margin: const EdgeInsets.only(bottom: 16),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(20),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withOpacity(0.04),
-            blurRadius: 10,
-            offset: const Offset(0, 3),
-          ),
-        ],
-      ),
-      child: IntrinsicHeight(
-        child: Row(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            // Left Category Colored Severity Indicator Strip
-            Container(
-              width: 5,
-              decoration: BoxDecoration(
-                color: report['categoryColor'],
-                borderRadius: const BorderRadius.only(
-                  topLeft: Radius.circular(20),
-                  bottomLeft: Radius.circular(20),
-                ),
-              ),
-            ),
+    return isCommunity
+        ? _buildCommunityPostCard(report, isLiked, likeCount, commentCount)
+        : _buildIncidentReportCard(report, isLiked, likeCount, commentCount);
+  }
 
-            // Card Body Content
-            Expanded(
-              child: Padding(
-                padding: const EdgeInsets.all(16.0),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    // Profile Header Row
-                    Row(
+  // ─── Clean social-style card for community/casual posts ───────────────────
+  Widget _buildCommunityPostCard(
+    Map<String, dynamic> report,
+    bool isLiked,
+    int likeCount,
+    int commentCount,
+  ) {
+    return GestureDetector(
+      onTap: () {
+        HapticFeedback.selectionClick();
+        Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (_) => CommunityPostDetailScreen(
+              report: report,
+            ),
+          ),
+        );
+      },
+      child: Container(
+        margin: const EdgeInsets.only(bottom: 14),
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(20),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withValues(alpha: 0.04),
+              blurRadius: 10,
+              offset: const Offset(0, 3),
+            ),
+          ],
+        ),
+        child: Padding(
+          padding: const EdgeInsets.all(16),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              // ── Author row ──────────────────────────────────────────────
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.center,
+                children: [
+                  CircleAvatar(
+                    radius: 20,
+                    backgroundColor:
+                        (report['avatarColor'] as Color).withValues(alpha: 0.15),
+                    child: Text(
+                      report['initials'],
+                      style: TextStyle(
+                        color: report['avatarColor'] as Color,
+                        fontWeight: FontWeight.bold,
+                        fontSize: 13,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        CircleAvatar(
-                          radius: 18,
-                          backgroundColor: report['avatarColor'].withOpacity(0.15),
-                          child: Text(
-                            report['initials'],
-                            style: TextStyle(
-                              color: report['avatarColor'],
-                              fontWeight: FontWeight.bold,
-                              fontSize: 13,
+                        Row(
+                          children: [
+                            Text(
+                              report['userName'],
+                              style: const TextStyle(
+                                fontWeight: FontWeight.bold,
+                                fontSize: 14,
+                                color: AppTheme.textPrimary,
+                              ),
                             ),
-                          ),
-                        ),
-                        const SizedBox(width: 8),
-                        Expanded(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Row(
-                                children: [
-                                  Text(
-                                    report['userName'],
-                                    style: const TextStyle(
-                                      fontWeight: FontWeight.bold,
-                                      fontSize: 14,
-                                      color: AppTheme.textPrimary,
-                                    ),
-                                  ),
-                                  if (report['isVerified'] == true) ...[
-                                    const SizedBox(width: 4),
-                                    const Icon(
-                                      Icons.verified,
-                                      color: Color(0xFF10B981),
-                                      size: 15,
-                                    ),
-                                  ],
-                                ],
-                              ),
-                              const SizedBox(height: 1),
-                              Text(
-                                report['timeAgo'],
-                                style: const TextStyle(
-                                  color: AppTheme.textSecondary,
-                                  fontSize: 11.5,
-                                ),
-                              ),
+                            if (report['isVerified'] == true) ...[
+                              const SizedBox(width: 4),
+                              const Icon(Icons.verified,
+                                  color: Color(0xFF10B981), size: 15),
                             ],
-                          ),
+                          ],
                         ),
-                        // Top Right Category Badge
-                        Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 5),
-                          decoration: BoxDecoration(
-                            color: report['categoryColor'],
-                            borderRadius: BorderRadius.circular(10),
-                          ),
-                          child: Text(
-                            report['category'],
-                            style: const TextStyle(
-                              color: Colors.white,
-                              fontSize: 9,
-                              fontWeight: FontWeight.bold,
-                              letterSpacing: 0.5,
-                            ),
+                        Text(
+                          report['timeAgo'],
+                          style: const TextStyle(
+                            color: AppTheme.textSecondary,
+                            fontSize: 11.5,
                           ),
                         ),
                       ],
                     ),
-                    const SizedBox(height: 12),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 12),
 
-                    // Content/Title
+              // ── Post content ─────────────────────────────────────────────
+              Text(
+                report['title'],
+                style: const TextStyle(
+                  fontSize: 14.5,
+                  color: AppTheme.textPrimary,
+                  height: 1.5,
+                ),
+              ),
 
-                    if (isCommunity) ...[
-                      Text(
-                        report['title'],
-                        style: const TextStyle(
-                          fontSize: 14.5,
-                          color: AppTheme.textPrimary,
-                          height: 1.45,
+              // ── Attached image (if any) ──────────────────────────────────
+              if (report['imageAsset'] != null) ...[
+                const SizedBox(height: 10),
+                _buildIncidentImage(
+                  report['imageAsset'],
+                  '',
+                  isLocalFile: !report['imageAsset'].toString().startsWith('http') &&
+                      !report['imageAsset'].toString().startsWith('assets/'),
+                  isVideo: report['isVideo'] == true,
+                  showLabel: false,
+                ),
+              ],
+              const SizedBox(height: 14),
+
+              // ── Action row: like · comment ───────────────────────────────
+              Row(
+                children: [
+                  GestureDetector(
+                    behavior: HitTestBehavior.opaque,
+                    onTap: () {
+                      HapticFeedback.lightImpact();
+                      _toggleLike(report['id']);
+                    },
+                    child: Row(
+                      children: [
+                        Icon(
+                          isLiked
+                              ? Icons.favorite
+                              : Icons.favorite_border,
+                          size: 17,
+                          color: isLiked
+                              ? const Color(0xFFEF4444)
+                              : AppTheme.textSecondary,
                         ),
+                        const SizedBox(width: 5),
+                        Text(
+                          '$likeCount',
+                          style: TextStyle(
+                            color: isLiked
+                                ? const Color(0xFFEF4444)
+                                : AppTheme.textSecondary,
+                            fontSize: 12.5,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(width: 18),
+                  GestureDetector(
+                    behavior: HitTestBehavior.opaque,
+                    onTap: () {
+                      HapticFeedback.lightImpact();
+                      Navigator.push(
+                        context,
+                        MaterialPageRoute(
+                          builder: (_) => CommunityPostDetailScreen(
+                            report: report,
+                          ),
+                        ),
+                      );
+                    },
+                    child: Row(
+                      children: [
+                        const Icon(LucideIcons.messageCircle,
+                            size: 17, color: AppTheme.textSecondary),
+                        const SizedBox(width: 5),
+                        Text(
+                          '$commentCount',
+                          style: const TextStyle(
+                            color: AppTheme.textSecondary,
+                            fontSize: 12.5,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  const Spacer(),
+                  const Icon(LucideIcons.share2,
+                      size: 16, color: AppTheme.textSecondary),
+                ],
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  // ─── Accented incident-report card ────────────────────────────────────────
+  Widget _buildIncidentReportCard(
+    Map<String, dynamic> report,
+    bool isLiked,
+    int likeCount,
+    int commentCount,
+  ) {
+
+    return GestureDetector(
+      onTap: () {
+        HapticFeedback.selectionClick();
+        Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (_) => ReactionsCommentsScreen(
+              report: report,
+              onUpdate: (updated) {
+                final list = List<Map<String, dynamic>>.from(
+                    communityReportsNotifier.value);
+                final idx =
+                    list.indexWhere((r) => r['id'] == report['id']);
+                if (idx != -1) {
+                  list[idx] = updated;
+                  communityReportsNotifier.value = list;
+                }
+              },
+            ),
+          ),
+        );
+      },
+      child: Container(
+        margin: const EdgeInsets.only(bottom: 16),
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(20),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withValues(alpha: 0.04),
+              blurRadius: 10,
+              offset: const Offset(0, 3),
+            ),
+          ],
+        ),
+        child: IntrinsicHeight(
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              // ── Left accent colour strip ─────────────────────────────
+              Container(
+                width: 5,
+                decoration: BoxDecoration(
+                  color: report['categoryColor'],
+                  borderRadius: const BorderRadius.only(
+                    topLeft: Radius.circular(20),
+                    bottomLeft: Radius.circular(20),
+                  ),
+                ),
+              ),
+
+              // ── Card body ────────────────────────────────────────────
+              Expanded(
+                child: Padding(
+                  padding: const EdgeInsets.all(16.0),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      // Author row
+                      Row(
+                        children: [
+                          CircleAvatar(
+                            radius: 18,
+                            backgroundColor:
+                                (report['avatarColor'] as Color)
+                                    .withValues(alpha: 0.15),
+                            child: Text(
+                              report['initials'],
+                              style: TextStyle(
+                                color: report['avatarColor'] as Color,
+                                fontWeight: FontWeight.bold,
+                                fontSize: 13,
+                              ),
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Row(
+                                  children: [
+                                    Text(
+                                      report['userName'],
+                                      style: const TextStyle(
+                                        fontWeight: FontWeight.bold,
+                                        fontSize: 14,
+                                        color: AppTheme.textPrimary,
+                                      ),
+                                    ),
+                                    if (report['isVerified'] == true) ...[
+                                      const SizedBox(width: 4),
+                                      const Icon(Icons.verified,
+                                          color: Color(0xFF10B981),
+                                          size: 15),
+                                    ],
+                                  ],
+                                ),
+                                const SizedBox(height: 1),
+                                Text(
+                                  report['timeAgo'],
+                                  style: const TextStyle(
+                                    color: AppTheme.textSecondary,
+                                    fontSize: 11.5,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                          // Solid category badge
+                          Container(
+                            padding: const EdgeInsets.symmetric(
+                                horizontal: 9, vertical: 5),
+                            decoration: BoxDecoration(
+                              color: report['categoryColor'],
+                              borderRadius: BorderRadius.circular(10),
+                            ),
+                            child: Text(
+                              report['category'],
+                              style: const TextStyle(
+                                color: Colors.white,
+                                fontSize: 9,
+                                fontWeight: FontWeight.bold,
+                                letterSpacing: 0.5,
+                              ),
+                            ),
+                          ),
+                        ],
                       ),
-                    ] else ...[
-                      // Title
+                      const SizedBox(height: 12),
+
+                      // Title (bold for incidents)
                       Text(
                         report['title'],
                         style: const TextStyle(
@@ -733,7 +1054,7 @@ class _CommunityFeedScreenState extends State<CommunityFeedScreen> {
                       ),
                       const SizedBox(height: 6),
 
-                      // Description text
+                      // Description
                       Text(
                         report['description'],
                         style: const TextStyle(
@@ -744,135 +1065,150 @@ class _CommunityFeedScreenState extends State<CommunityFeedScreen> {
                         maxLines: 3,
                         overflow: TextOverflow.ellipsis,
                       ),
-                    ],
-                    const SizedBox(height: 10),
+                      const SizedBox(height: 10),
 
-                    // Card Incident Image with translucent severity warning tag on top left
-                    if (report['imageAsset'] != null) ...[
-                      _buildIncidentImage(
-                        report['imageAsset'],
-                        report['severity'],
-                        isLocalFile: !report['imageAsset'].startsWith('http') && !report['imageAsset'].startsWith('assets/'),
-                        isVideo: report['isVideo'] == true,
-                      ),
-                    ] else if (!isCommunity && report['category'] == 'FLOOD') ...[
-                      _buildIncidentImage(
-                        'https://images.unsplash.com/photo-1547683905-f686c993aae5?auto=format&fit=crop&q=80&w=800',
-                        report['severity'],
-                      ),
-                    ] else if (!isCommunity && report['category'] == 'FIRE') ...[
-                      _buildIncidentImage(
-                        'https://images.unsplash.com/photo-1508873699372-7aeab60b44ab?auto=format&fit=crop&q=80&w=800',
-                        report['severity'],
-                      ),
-                    ],
-
-                    const SizedBox(height: 12),
-
-                    // Card Footer Location pin & likes + comments interaction stats
-                    Row(
-                      children: [
-                        if (report['location'].toString().trim().isNotEmpty) ...[
-                          const Icon(
-                            LucideIcons.mapPin,
-                            size: 13,
-                            color: AppTheme.textSecondary,
-                          ),
-                          const SizedBox(width: 4),
-                          Expanded(
-                            child: Text(
-                              report['location'],
-                              style: const TextStyle(
-                                color: AppTheme.textSecondary,
-                                fontSize: 12,
-                                fontWeight: FontWeight.w500,
-                              ),
-                              overflow: TextOverflow.ellipsis,
-                            ),
-                          ),
-                        ] else
-                          const Spacer(),
-                        // Likes action button
-                        GestureDetector(
-                          behavior: HitTestBehavior.opaque,
-                          onTap: () {
-                            HapticFeedback.lightImpact();
-                            _toggleLike(report['id']);
-                          },
-                          child: Row(
-                            children: [
-                              Icon(
-                                isLiked ? Icons.thumb_up : Icons.thumb_up_outlined,
-                                size: 15,
-                                color: isLiked ? AppTheme.primaryColor : AppTheme.textSecondary,
-                              ),
-                              const SizedBox(width: 4),
-                              Text(
-                                '$likeCount',
-                                style: TextStyle(
-                                  color: isLiked ? AppTheme.primaryColor : AppTheme.textSecondary,
-                                  fontSize: 12,
-                                  fontWeight: FontWeight.bold,
-                                ),
-                              ),
-                            ],
-                          ),
+                      // Incident media image with severity label
+                      if (report['imageAsset'] != null) ...[
+                        _buildIncidentImage(
+                          report['imageAsset'],
+                          report['severity'],
+                          isLocalFile: !report['imageAsset']
+                                  .toString()
+                                  .startsWith('http') &&
+                              !report['imageAsset']
+                                  .toString()
+                                  .startsWith('assets/'),
+                          isVideo: report['isVideo'] == true,
                         ),
-                        const SizedBox(width: 12),
-                        // Comments action button opens ReactionsCommentsScreen!
-                        GestureDetector(
-                          behavior: HitTestBehavior.opaque,
-                          onTap: () {
-                            HapticFeedback.lightImpact();
-                            Navigator.push(
-                              context,
-                              MaterialPageRoute(
-                                builder: (context) => ReactionsCommentsScreen(
-                                  report: report,
-                                  onUpdate: (updated) {
-                                    final list = List<Map<String, dynamic>>.from(communityReportsNotifier.value);
-                                    final idx = list.indexWhere((r) => r['id'] == report['id']);
-                                    if (idx != -1) {
-                                      list[idx] = updated;
-                                      communityReportsNotifier.value = list;
-                                    }
-                                  },
-                                ),
-                              ),
-                            );
-                          },
-                          child: Row(
-                            children: [
-                              const Icon(
-                                LucideIcons.messageSquare,
-                                size: 15,
-                                color: AppTheme.textSecondary,
-                              ),
-                              const SizedBox(width: 4),
-                              Text(
-                                '$commentCount',
+                      ] else if (report['category'] == 'FLOOD') ...[
+                        _buildIncidentImage(
+                          'https://images.unsplash.com/photo-1547683905-f686c993aae5?auto=format&fit=crop&q=80&w=800',
+                          report['severity'],
+                        ),
+                      ] else if (report['category'] == 'FIRE') ...[
+                        _buildIncidentImage(
+                          'https://images.unsplash.com/photo-1508873699372-7aeab60b44ab?auto=format&fit=crop&q=80&w=800',
+                          report['severity'],
+                        ),
+                      ],
+
+                      const SizedBox(height: 12),
+
+                      // Footer: location pin + action stats
+                      Row(
+                        children: [
+                          if (report['location'].toString().trim().isNotEmpty) ...[
+                            const Icon(LucideIcons.mapPin,
+                                size: 13, color: AppTheme.textSecondary),
+                            const SizedBox(width: 4),
+                            Expanded(
+                              child: Text(
+                                report['location'],
                                 style: const TextStyle(
                                   color: AppTheme.textSecondary,
                                   fontSize: 12,
-                                  fontWeight: FontWeight.bold,
+                                  fontWeight: FontWeight.w500,
                                 ),
+                                overflow: TextOverflow.ellipsis,
                               ),
-                            ],
+                            ),
+                          ] else
+                            const Spacer(),
+                          // Likes
+                          GestureDetector(
+                            behavior: HitTestBehavior.opaque,
+                            onTap: () {
+                              HapticFeedback.lightImpact();
+                              _toggleLike(report['id']);
+                            },
+                            child: Row(
+                              children: [
+                                Icon(
+                                  isLiked
+                                      ? Icons.thumb_up
+                                      : Icons.thumb_up_outlined,
+                                  size: 15,
+                                  color: isLiked
+                                      ? AppTheme.primaryColor
+                                      : AppTheme.textSecondary,
+                                ),
+                                const SizedBox(width: 4),
+                                Text(
+                                  '$likeCount',
+                                  style: TextStyle(
+                                    color: isLiked
+                                        ? AppTheme.primaryColor
+                                        : AppTheme.textSecondary,
+                                    fontSize: 12,
+                                    fontWeight: FontWeight.bold,
+                                  ),
+                                ),
+                              ],
+                            ),
                           ),
-                        ),
-                      ],
-                    ),
-                  ],
+                          const SizedBox(width: 12),
+                          // Comments
+                          GestureDetector(
+                            behavior: HitTestBehavior.opaque,
+                            onTap: () {
+                              HapticFeedback.lightImpact();
+                              Navigator.push(
+                                context,
+                                MaterialPageRoute(
+                                  builder: (_) => ReactionsCommentsScreen(
+                                    report: report,
+                                    onUpdate: (updated) {
+                                      final list =
+                                          List<Map<String, dynamic>>.from(
+                                              communityReportsNotifier.value);
+                                      final idx = list.indexWhere(
+                                          (r) => r['id'] == report['id']);
+                                      if (idx != -1) {
+                                        list[idx] = updated;
+                                        communityReportsNotifier.value = list;
+                                      }
+                                    },
+                                  ),
+                                ),
+                              );
+                            },
+                            child: Row(
+                              children: [
+                                const Icon(LucideIcons.messageSquare,
+                                    size: 15,
+                                    color: AppTheme.textSecondary),
+                                const SizedBox(width: 4),
+                                Text(
+                                  '$commentCount',
+                                  style: const TextStyle(
+                                    color: AppTheme.textSecondary,
+                                    fontSize: 12,
+                                    fontWeight: FontWeight.bold,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ],
+                      ),
+                    ],
+                  ),
                 ),
               ),
-            ),
-          ],
+            ],
+          ),
         ),
       ),
     );
   }
 
-  Widget _buildIncidentImage(String imageUrl, String label, {bool isLocalFile = false, bool isVideo = false}) {
+  Widget _buildIncidentImage(
+    String imageUrl,
+    String label, {
+    bool isLocalFile = false,
+    bool isVideo = false,
+    bool showLabel = true,
+  }) {
     ImageProvider imageProvider;
     if (isLocalFile) {
       imageProvider = FileImage(File(imageUrl));
@@ -884,7 +1220,7 @@ class _CommunityFeedScreenState extends State<CommunityFeedScreen> {
 
     return Container(
       margin: const EdgeInsets.only(top: 4, bottom: 8),
-      height: 140,
+      height: 160,
       width: double.infinity,
       decoration: BoxDecoration(
         borderRadius: BorderRadius.circular(16),
@@ -896,9 +1232,11 @@ class _CommunityFeedScreenState extends State<CommunityFeedScreen> {
       clipBehavior: Clip.antiAlias,
       child: Stack(
         children: [
+          // Subtle scrim
           Container(
-            color: Colors.black.withOpacity(isVideo ? 0.25 : 0.06),
+            color: Colors.black.withOpacity(isVideo ? 0.25 : 0.04),
           ),
+          // Play button for video
           if (isVideo)
             Center(
               child: Container(
@@ -914,36 +1252,42 @@ class _CommunityFeedScreenState extends State<CommunityFeedScreen> {
                 ),
               ),
             ),
-          Positioned(
-            top: 10,
-            left: 10,
-            child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-              decoration: BoxDecoration(
-                color: Colors.black.withOpacity(0.65),
-                borderRadius: BorderRadius.circular(6),
-              ),
-              child: Row(
-                children: [
-                  Icon(
-                    label == 'CRITICAL' ? LucideIcons.alertTriangle : LucideIcons.flame,
-                    color: label == 'CRITICAL' ? Colors.red : Colors.orange,
-                    size: 12,
-                  ),
-                  const SizedBox(width: 4),
-                  Text(
-                    label,
-                    style: const TextStyle(
-                      color: Colors.white,
-                      fontSize: 9.5,
-                      fontWeight: FontWeight.bold,
-                      letterSpacing: 0.5,
+          // Severity label — hidden for community/casual posts
+          if (showLabel && label.isNotEmpty)
+            Positioned(
+              top: 10,
+              left: 10,
+              child: Container(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                decoration: BoxDecoration(
+                  color: Colors.black.withOpacity(0.65),
+                  borderRadius: BorderRadius.circular(6),
+                ),
+                child: Row(
+                  children: [
+                    Icon(
+                      label == 'CRITICAL'
+                          ? LucideIcons.alertTriangle
+                          : LucideIcons.flame,
+                      color:
+                          label == 'CRITICAL' ? Colors.red : Colors.orange,
+                      size: 12,
                     ),
-                  ),
-                ],
+                    const SizedBox(width: 4),
+                    Text(
+                      label,
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 9.5,
+                        fontWeight: FontWeight.bold,
+                        letterSpacing: 0.5,
+                      ),
+                    ),
+                  ],
+                ),
               ),
             ),
-          ),
         ],
       ),
     );
@@ -1175,8 +1519,9 @@ class _CommunityFeedScreenState extends State<CommunityFeedScreen> {
                                   isActive: _activeSeverities.contains('CRITICAL'),
                                   onChanged: (val) {
                                     setSheetState(() {
-                                      if (val) _activeSeverities.add('CRITICAL');
-                                      else if (_activeSeverities.length > 1) _activeSeverities.remove('CRITICAL');
+                                      if (val) {
+                                        _activeSeverities.add('CRITICAL');
+                                      } else if (_activeSeverities.length > 1) _activeSeverities.remove('CRITICAL');
                                     });
                                   },
                                 ),
@@ -1187,8 +1532,9 @@ class _CommunityFeedScreenState extends State<CommunityFeedScreen> {
                                   isActive: _activeSeverities.contains('WARNING'),
                                   onChanged: (val) {
                                     setSheetState(() {
-                                      if (val) _activeSeverities.add('WARNING');
-                                      else if (_activeSeverities.length > 1) _activeSeverities.remove('WARNING');
+                                      if (val) {
+                                        _activeSeverities.add('WARNING');
+                                      } else if (_activeSeverities.length > 1) _activeSeverities.remove('WARNING');
                                     });
                                   },
                                 ),
@@ -1199,8 +1545,9 @@ class _CommunityFeedScreenState extends State<CommunityFeedScreen> {
                                   isActive: _activeSeverities.contains('MEDIUM'),
                                   onChanged: (val) {
                                     setSheetState(() {
-                                      if (val) _activeSeverities.add('MEDIUM');
-                                      else if (_activeSeverities.length > 1) _activeSeverities.remove('MEDIUM');
+                                      if (val) {
+                                        _activeSeverities.add('MEDIUM');
+                                      } else if (_activeSeverities.length > 1) _activeSeverities.remove('MEDIUM');
                                     });
                                   },
                                 ),
@@ -1211,8 +1558,9 @@ class _CommunityFeedScreenState extends State<CommunityFeedScreen> {
                                   isActive: _activeSeverities.contains('LOW'),
                                   onChanged: (val) {
                                     setSheetState(() {
-                                      if (val) _activeSeverities.add('LOW');
-                                      else if (_activeSeverities.length > 1) _activeSeverities.remove('LOW');
+                                      if (val) {
+                                        _activeSeverities.add('LOW');
+                                      } else if (_activeSeverities.length > 1) _activeSeverities.remove('LOW');
                                     });
                                   },
                                 ),
@@ -1484,334 +1832,6 @@ class _CommunityFeedScreenState extends State<CommunityFeedScreen> {
     );
   }
 
-  void _showReplySheet(Map<String, dynamic> report) {
-    final TextEditingController replyController = TextEditingController();
-
-    showModalBottomSheet(
-      context: context,
-      isScrollControlled: true,
-      backgroundColor: Colors.transparent,
-      builder: (context) {
-        return DraggableScrollableSheet(
-          initialChildSize: 0.85,
-          minChildSize: 0.5,
-          maxChildSize: 0.95,
-          builder: (ctx, scrollControllerInner) {
-            return Container(
-              decoration: const BoxDecoration(
-                color: Colors.white,
-                borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
-              ),
-              child: StatefulBuilder(
-                builder: (sheetContext, setSheetState) {
-                  final currentReports = communityReportsNotifier.value;
-                  final currentReport = currentReports.firstWhere(
-                    (r) => r['id'].toString() == report['id'].toString(),
-                    orElse: () => report,
-                  );
-                  final List<Map<String, dynamic>> replies = 
-                      List<Map<String, dynamic>>.from(currentReport['replies'] ?? []);
-
-                  Future<void> sendReply() async {
-                    final text = replyController.text.trim();
-                    if (text.isEmpty) return;
-
-                    HapticFeedback.lightImpact();
-
-                    final newReply = {
-                      'id': 'cpr-local-${DateTime.now().millisecondsSinceEpoch}',
-                      'author_name': 'Ghana Citizen',
-                      'author_initials': 'GC',
-                      'content': text,
-                      'created_at': DateTime.now().toIso8601String(),
-                    };
-
-                    // Prepend/append locally to global state
-                    final list = List<Map<String, dynamic>>.from(communityReportsNotifier.value);
-                    final idx = list.indexWhere((r) => r['id'].toString() == report['id'].toString());
-                    if (idx != -1) {
-                      final updated = Map<String, dynamic>.from(list[idx]);
-                      final repliesList = List<Map<String, dynamic>>.from(updated['replies'] ?? []);
-                      repliesList.add(newReply);
-                      updated['replies'] = repliesList;
-                      updated['commentsCount'] = repliesList.length;
-                      list[idx] = updated;
-                      communityReportsNotifier.value = list;
-                    }
-
-                    replyController.clear();
-                    setSheetState(() {});
-
-                    // Auto-scroll to bottom of the list
-                    Future.delayed(const Duration(milliseconds: 100), () {
-                      if (scrollControllerInner.hasClients) {
-                        scrollControllerInner.animateTo(
-                          scrollControllerInner.position.maxScrollExtent,
-                          duration: const Duration(milliseconds: 300),
-                          curve: Curves.easeOut,
-                        );
-                      }
-                    });
-
-                    try {
-                      final saved = await IncidentApi.instance.addReply(report['id'].toString(), text);
-                      final list = List<Map<String, dynamic>>.from(communityReportsNotifier.value);
-                      final idx = list.indexWhere((r) => r['id'].toString() == report['id'].toString());
-                      if (idx != -1) {
-                        final updated = Map<String, dynamic>.from(list[idx]);
-                        final repliesList = List<Map<String, dynamic>>.from(updated['replies'] ?? []);
-                        final rIdx = repliesList.indexWhere((r) => r['id'] == newReply['id']);
-                        if (rIdx != -1) {
-                          repliesList[rIdx] = Map<String, dynamic>.from(saved);
-                          updated['replies'] = repliesList;
-                          list[idx] = updated;
-                          communityReportsNotifier.value = list;
-                        }
-                      }
-                      setSheetState(() {});
-                    } catch (e) {
-                      print('Error submitting reply: $e');
-                    }
-                  }
-
-                  return Column(
-                    children: [
-                      // Header
-                      Padding(
-                        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-                        child: Row(
-                          children: [
-                            const Text(
-                              'Discussion',
-                              style: TextStyle(
-                                fontSize: 18,
-                                fontWeight: FontWeight.bold,
-                                color: AppTheme.textPrimary,
-                              ),
-                            ),
-                            const Spacer(),
-                            IconButton(
-                              icon: const Icon(LucideIcons.x, size: 20, color: AppTheme.textSecondary),
-                              onPressed: () => Navigator.pop(sheetContext),
-                            ),
-                          ],
-                        ),
-                      ),
-                      const Divider(height: 1),
-
-                      // Scrollable replies
-                      Expanded(
-                        child: ListView(
-                          controller: scrollControllerInner,
-                          padding: const EdgeInsets.all(16),
-                          children: [
-                            // Main Post Card
-                            Container(
-                              padding: const EdgeInsets.all(16),
-                              decoration: BoxDecoration(
-                                color: const Color(0xFFF9FAFB),
-                                borderRadius: BorderRadius.circular(16),
-                                border: Border.all(color: const Color(0xFFE5E7EB)),
-                              ),
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  Row(
-                                    children: [
-                                      CircleAvatar(
-                                        radius: 18,
-                                        backgroundColor: const Color(0xFFEDE9FE),
-                                        child: Text(
-                                          currentReport['initials'],
-                                          style: const TextStyle(
-                                            color: Color(0xFF8B5CF6),
-                                            fontWeight: FontWeight.bold,
-                                            fontSize: 13,
-                                          ),
-                                        ),
-                                      ),
-                                      const SizedBox(width: 10),
-                                      Expanded(
-                                        child: Column(
-                                          crossAxisAlignment: CrossAxisAlignment.start,
-                                          children: [
-                                            Row(
-                                              children: [
-                                                Text(
-                                                  currentReport['userName'],
-                                                  style: const TextStyle(
-                                                    fontWeight: FontWeight.bold,
-                                                    fontSize: 14,
-                                                    color: AppTheme.textPrimary,
-                                                  ),
-                                                ),
-                                                if (currentReport['isVerified'] == true) ...[
-                                                  const SizedBox(width: 4),
-                                                  const Icon(
-                                                    Icons.verified,
-                                                    color: Color(0xFF10B981),
-                                                    size: 15,
-                                                  ),
-                                                ],
-                                              ],
-                                            ),
-                                            Text(
-                                              currentReport['timeAgo'],
-                                              style: const TextStyle(
-                                                color: AppTheme.textSecondary,
-                                                fontSize: 11.5,
-                                              ),
-                                            ),
-                                          ],
-                                        ),
-                                      ),
-                                    ],
-                                  ),
-                                  const SizedBox(height: 12),
-                                  Text(
-                                    currentReport['title'],
-                                    style: const TextStyle(
-                                      fontSize: 15.5,
-                                      color: AppTheme.textPrimary,
-                                      height: 1.4,
-                                    ),
-                                  ),
-                                ],
-                              ),
-                            ),
-                            const SizedBox(height: 20),
-
-                            // Replies header label
-                            Text(
-                              'REPLIES (${replies.length})',
-                              style: const TextStyle(
-                                fontSize: 11,
-                                fontWeight: FontWeight.bold,
-                                color: AppTheme.textSecondary,
-                                letterSpacing: 1.1,
-                              ),
-                            ),
-                            const SizedBox(height: 12),
-
-                            // Replies Stream
-                            if (replies.isEmpty)
-                              const Padding(
-                                padding: EdgeInsets.all(40),
-                                child: Center(
-                                  child: Text(
-                                    'No replies yet. Start the conversation!',
-                                    style: TextStyle(color: Colors.grey, fontSize: 13),
-                                  ),
-                                ),
-                              )
-                            else
-                              ...replies.map((reply) {
-                                return Container(
-                                  margin: const EdgeInsets.only(bottom: 12),
-                                  padding: const EdgeInsets.all(14),
-                                  decoration: BoxDecoration(
-                                    color: Colors.white,
-                                    borderRadius: BorderRadius.circular(16),
-                                    border: Border.all(color: const Color(0xFFE5E7EB)),
-                                  ),
-                                  child: Column(
-                                    crossAxisAlignment: CrossAxisAlignment.start,
-                                    children: [
-                                      Row(
-                                        children: [
-                                          CircleAvatar(
-                                            radius: 14,
-                                            backgroundColor: const Color(0xFFF3F4F6),
-                                            child: Text(
-                                              reply['author_initials'] ?? 'GC',
-                                              style: const TextStyle(
-                                                color: AppTheme.textSecondary,
-                                                fontWeight: FontWeight.bold,
-                                                fontSize: 10,
-                                              ),
-                                            ),
-                                          ),
-                                          const SizedBox(width: 8),
-                                          Text(
-                                            reply['author_name'] ?? 'Ghana Citizen',
-                                            style: const TextStyle(
-                                              fontWeight: FontWeight.bold,
-                                              fontSize: 13,
-                                              color: AppTheme.textPrimary,
-                                            ),
-                                          ),
-                                        ],
-                                      ),
-                                      const SizedBox(height: 8),
-                                      Text(
-                                        reply['content'] ?? '',
-                                        style: const TextStyle(
-                                          color: AppTheme.textPrimary,
-                                          fontSize: 13.5,
-                                          height: 1.4,
-                                        ),
-                                      ),
-                                    ],
-                                  ),
-                                );
-                              }).toList(),
-                          ],
-                        ),
-                      ),
-
-                      // Send reply input
-                      Padding(
-                        padding: EdgeInsets.only(
-                          left: 16, right: 16, top: 8,
-                          bottom: MediaQuery.of(sheetContext).viewInsets.bottom + 16,
-                        ),
-                        child: Row(
-                          children: [
-                            Expanded(
-                              child: Container(
-                                decoration: BoxDecoration(
-                                  color: const Color(0xFFF3F4F6),
-                                  borderRadius: BorderRadius.circular(24),
-                                ),
-                                padding: const EdgeInsets.symmetric(horizontal: 16),
-                                child: TextField(
-                                  controller: replyController,
-                                  style: const TextStyle(fontSize: 14),
-                                  decoration: const InputDecoration(
-                                    hintText: 'Post your reply...',
-                                    border: InputBorder.none,
-                                    enabledBorder: InputBorder.none,
-                                    focusedBorder: InputBorder.none,
-                                  ),
-                                  onSubmitted: (_) => sendReply(),
-                                ),
-                              ),
-                            ),
-                            const SizedBox(width: 12),
-                            GestureDetector(
-                              onTap: sendReply,
-                              child: Container(
-                                padding: const EdgeInsets.all(12),
-                                decoration: const BoxDecoration(
-                                  color: Color(0xFF8B5CF6),
-                                  shape: BoxShape.circle,
-                                ),
-                                child: const Icon(LucideIcons.send, color: Colors.white, size: 18),
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                    ],
-                  );
-                },
-              ),
-            );
-          },
-        );
-      },
-    );
-  }
 }
 
 class _ComposeOption extends StatelessWidget {

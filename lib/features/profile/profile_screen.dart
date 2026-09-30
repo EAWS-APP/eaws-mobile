@@ -1,3 +1,5 @@
+import 'dart:convert';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:lucide_icons/lucide_icons.dart';
@@ -6,6 +8,7 @@ import '../auth/auth_service.dart';
 import '../auth/login_screen.dart';
 import 'profile_data.dart';
 import 'edit_profile_screen.dart';
+import 'messages_screen.dart';
 
 class ProfileScreen extends StatefulWidget {
   const ProfileScreen({super.key});
@@ -19,12 +22,32 @@ class _ProfileScreenState extends State<ProfileScreen> {
   bool _receiveNotifications = true;
   bool _backgroundLocation = true;
   bool _offlineSMS = true;
+  int _contactCount = 0;
 
   @override
   void initState() {
     super.initState();
-    // Load from supabase or local session
-    ProfileData.loadFromSession();
+    _initProfile();
+  }
+
+  Future<void> _initProfile() async {
+    await ProfileData.loadFromSession();
+    
+    // Load dynamic contacts count
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final String? contactsJson = prefs.getString('eaws_emergency_contacts');
+      if (contactsJson != null) {
+        final List<dynamic> decoded = jsonDecode(contactsJson);
+        _contactCount = decoded.length;
+      }
+    } catch (e) {
+      print('Failed to load contacts count: $e');
+    }
+
+    if (mounted) {
+      setState(() {});
+    }
   }
 
   Future<void> _handleSignOut() async {
@@ -121,9 +144,25 @@ class _ProfileScreenState extends State<ProfileScreen> {
                               _buildMenuTile(
                                 icon: LucideIcons.users,
                                 title: 'Emergency Contacts',
-                                subtitle: '3 contacts added',
+                                subtitle: '$_contactCount contacts added',
                                 onTap: () {
                                   HapticFeedback.lightImpact();
+                                  ScaffoldMessenger.of(context).showSnackBar(
+                                    const SnackBar(
+                                      content: Text('Please manage your emergency contacts from the Home dashboard.'),
+                                      backgroundColor: AppTheme.primaryColor,
+                                    ),
+                                  );
+                                },
+                              ),
+                              const Divider(height: 1),
+                              _buildMenuTile(
+                                icon: LucideIcons.messageCircle,
+                                title: 'Control Room Messages',
+                                subtitle: 'Direct line to dispatch operators',
+                                onTap: () {
+                                  HapticFeedback.lightImpact();
+                                  Navigator.push(context, MaterialPageRoute(builder: (_) => const MessagesScreen()));
                                 },
                               ),
                               const Divider(height: 1),

@@ -181,6 +181,13 @@ class _PhoneLoginScreenState extends State<PhoneLoginScreen> {
           ),
         ),
       );
+    } else if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Invalid or unregistered phone number. Please check your number or register an account.'),
+          backgroundColor: AppTheme.errorColor,
+        ),
+      );
     }
   }
 

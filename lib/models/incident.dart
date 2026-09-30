@@ -48,15 +48,15 @@ class Incident {
   factory Incident.fromJson(Map<String, dynamic> json) {
     return Incident(
       id: json['id'].toString(),
-      userId: json['user_id']?.toString(),
-      userName: json['user_name']?.toString(),
+      userId: (json['user_id'] ?? json['reporter_id'])?.toString(),
+      userName: _reporterName(json),
       category: (json['category'] ?? 'OTHER').toString(),
       severity: (json['severity'] ?? 'PENDING TRIAGE').toString(),
       status: (json['status'] ?? 'pending').toString(),
       title: (json['title'] ?? 'Incident reported').toString(),
       description: (json['description'] ?? '').toString(),
       isAnonymous: json['is_anonymous'] == true,
-      isVerified: json['is_verified'] == true,
+      isVerified: json['is_verified'] == true || _isOfficialReporter(json),
       locationName: (json['location_name'] ?? json['location'] ?? 'Unknown location').toString(),
       latitude: _asDouble(json['latitude']),
       longitude: _asDouble(json['longitude']),
@@ -80,6 +80,7 @@ class Incident {
       'avatarColor': isAnonymous ? Colors.grey : AppTheme.primaryColor,
       'isVerified': isVerified,
       'timeAgo': _timeAgo(createdAt),
+      'createdAt': createdAt.toIso8601String(),
       'category': category.toUpperCase(),
       'categoryColor': color,
       'title': title,
@@ -124,6 +125,31 @@ class Incident {
     return int.tryParse(value?.toString() ?? '') ?? 0;
   }
 
+  static String? _reporterName(Map<String, dynamic> json) {
+    final directName = json['user_name'] ?? json['reporter_name'];
+    if (directName != null && directName.toString().trim().isNotEmpty) {
+      return directName.toString();
+    }
+
+    final profile = json['reporter_profile'];
+    if (profile is Map) {
+      final fullName = profile['full_name'];
+      if (fullName != null && fullName.toString().trim().isNotEmpty) {
+        return fullName.toString();
+      }
+    }
+
+    return null;
+  }
+
+  static bool _isOfficialReporter(Map<String, dynamic> json) {
+    final profile = json['reporter_profile'];
+    if (profile is! Map) return false;
+
+    final role = profile['user_role']?.toString().toLowerCase();
+    return role != null && role != 'citizen';
+  }
+
   static String _initials(String name) {
     final parts = name.trim().split(RegExp(r'\s+')).where((part) => part.isNotEmpty).toList();
     if (parts.isEmpty) return 'GC';
@@ -139,4 +165,3 @@ class Incident {
     return '${delta.inDays} days ago';
   }
 }
-

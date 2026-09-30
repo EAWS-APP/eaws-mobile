@@ -2,7 +2,6 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:lucide_icons/lucide_icons.dart';
 import '../../core/theme.dart';
-import 'community_feed_screen.dart';
 import 'reactions_comments_screen.dart';
 
 class IncidentDetailScreen extends StatefulWidget {

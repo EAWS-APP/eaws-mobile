@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:lucide_icons/lucide_icons.dart';
 import '../../core/theme.dart';
 import '../../core/eaws_logo.dart';
+import '../../core/user_session.dart';
 import '../dashboard/dashboard_screen.dart';
 import 'auth_service.dart';
 
@@ -124,6 +125,8 @@ class _OTPVerificationScreenState extends State<OTPVerificationScreen> {
 
     if (success) {
       if (mounted) {
+        // Resolve the user's real name before navigating so it's ready everywhere
+        await UserSession.instance.load(force: true);
         // Success Transition with full screen navigation
         Navigator.pushAndRemoveUntil(
           context,
