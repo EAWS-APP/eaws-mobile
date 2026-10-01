@@ -1,5 +1,5 @@
 import 'package:shared_preferences/shared_preferences.dart';
-import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:eaws_app/core/supabase_mock.dart';
 import '../features/auth/auth_service.dart';
 
 /// Global singleton that holds the resolved identity of the currently authenticated user.

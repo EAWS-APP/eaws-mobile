@@ -1,6 +1,6 @@
 import 'dart:convert';
 import 'package:shared_preferences/shared_preferences.dart';
-import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:eaws_app/core/supabase_mock.dart';
 import 'user_session.dart';
 
 /// Centralized per-user isolated database store.

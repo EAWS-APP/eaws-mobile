@@ -1,4 +1,4 @@
-import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:eaws_app/core/supabase_mock.dart';
 import '../../core/user_session.dart';
 import '../../core/user_data_store.dart';
 

@@ -1,5 +1,5 @@
 import 'package:flutter/material.dart';
-import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:eaws_app/core/supabase_mock.dart';
 import 'core/theme.dart';
 import 'features/auth/splash_screen.dart';
 

@@ -1,4 +1,4 @@
-import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:eaws_app/core/supabase_mock.dart';
 import '../models/alert_model.dart';
 import '../models/safe_zone_model.dart';
 

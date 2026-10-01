@@ -7,7 +7,7 @@ import '../../core/theme.dart';
 import '../../core/user_session.dart';
 import '../../core/api_client.dart';
 import '../feed/incident_api.dart';
-import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:eaws_app/core/supabase_mock.dart';
 
 class MessagesScreen extends StatefulWidget {
   const MessagesScreen({super.key});
