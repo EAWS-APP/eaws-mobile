@@ -42,8 +42,6 @@ app.*.map.json
 /android/app/debug
 /android/app/profile
 /android/app/release
-/android/build/
-.gradle/
 
 # Flutter SDK (never track the SDK inside the project)
 /flutter/
@@ -52,12 +50,9 @@ app.*.map.json
 /eaws-backend/
 /eaws-web-dashboard/
 
-# Dev screenshots and logs
+# Dev screenshots
 screenshot*.png
 shot_*.png
-simulator_*.png
-.jcode*
-*.png.bak
 
 # Metadata
 .metadata
