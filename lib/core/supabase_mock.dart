@@ -140,6 +140,7 @@ class PostgrestFilterBuilder {
   PostgrestFilterBuilder select([String columns = '*']) => this;
   PostgrestTransformBuilder eq(String column, dynamic value) => PostgrestTransformBuilder(table);
   PostgrestTransformBuilder or(String filter) => PostgrestTransformBuilder(table);
+  PostgrestTransformBuilder order(String column, {bool ascending = false}) => PostgrestTransformBuilder(table);
   
   Future<List<dynamic>> then<T>(Future<List<dynamic>> Function(List<dynamic>) onValue, {Function? onError}) async {
     return onValue([]);
