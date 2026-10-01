@@ -153,6 +153,7 @@ class PostgrestTransformBuilder {
   PostgrestTransformBuilder(this.table);
   
   Future<dynamic> single() async => {};
+  Future<dynamic> maybeSingle() async => {};
   PostgrestTransformBuilder order(String column, {bool ascending = false}) => this;
   Future<List<dynamic>> then<T>(Future<List<dynamic>> Function(List<dynamic>) onValue, {Function? onError}) async => onValue([]);
 }
