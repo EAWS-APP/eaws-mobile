@@ -50,7 +50,7 @@ class EawsApiClient {
       // Use real Supabase token if logged in; otherwise fall back to user-specific mock token
       // so the backend can resolve the correct registered name from its user registry.
       String token;
-      if (session?.accessToken != null) {
+      if (session?.accessToken != null && session!.accessToken != 'mock-token') {
         token = session!.accessToken;
       } else {
         // Embed the user's email in the mock token so the server's resolveAuthorName()

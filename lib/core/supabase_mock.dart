@@ -1,4 +1,3 @@
-
 import 'dart:convert';
 import 'dart:io';
 
@@ -27,15 +26,48 @@ class SupabaseClient {
   }
 }
 
+String get _baseUrl {
+  try {
+    if (Platform.isAndroid) return 'http://10.0.2.2:5001/api';
+  } catch (_) {}
+  return 'http://localhost:5001/api';
+}
+
+Future<dynamic> _postApi(String path, Map<String, dynamic> body) async {
+  final uri = Uri.parse('\$_baseUrl\$path');
+  final client = HttpClient();
+  try {
+    final request = await client.postUrl(uri);
+    request.headers.set(HttpHeaders.contentTypeHeader, 'application/json');
+    request.write(jsonEncode(body));
+    final response = await request.close();
+    final responseBody = await response.transform(utf8.decoder).join();
+    if (response.statusCode >= 400) throw Exception(responseBody);
+    return jsonDecode(responseBody);
+  } finally {
+    client.close(force: true);
+  }
+}
+
 class GoTrueClient {
-  User? currentUser = User(id: 'mock-user-123', userMetadata: {'full_name': 'Mock User'}, phone: '1234567890');
-  Session? currentSession = Session();
+  User? currentUser;
+  Session? currentSession;
   
   Future<AuthResponse> signUp({required String email, required String password, Map<String, dynamic>? data}) async {
+    final res = await _postApi('/auth/signup', {'email': email, 'password': password, 'metadata': data});
+    currentUser = User(id: res['user']?['id'] ?? 'mock-uuid', email: email, userMetadata: data);
+    currentSession = Session(accessToken: res['user']?['id'] ?? 'mock-token');
     return AuthResponse(user: currentUser, session: currentSession);
   }
   
   Future<AuthResponse> signInWithPassword({required String email, required String password}) async {
+    final res = await _postApi('/auth/signin', {'email': email, 'password': password});
+    currentUser = User(
+      id: res['user']?['id'] ?? 'mock-uuid', 
+      email: email, 
+      userMetadata: res['user']?['user_metadata']
+    );
+    currentSession = Session(accessToken: res['session']?['access_token'] ?? res['user']?['id'] ?? 'mock-token');
     return AuthResponse(user: currentUser, session: currentSession);
   }
   
@@ -59,108 +91,82 @@ class GoTrueClient {
 
 class User {
   final String id;
+  final String? email;
   final Map<String, dynamic>? userMetadata;
   final String? phone;
   
-  User({required this.id, this.userMetadata, this.phone});
+  User({required this.id, this.email, this.userMetadata, this.phone});
 }
 
-class Session {}
+class Session {
+  final String accessToken;
+  Session({this.accessToken = 'mock-token'});
+}
+
 class AuthResponse {
   final User? user;
   final Session? session;
   AuthResponse({this.user, this.session});
 }
+
 class UserResponse {
   final User user;
   UserResponse({required this.user});
 }
+
 class UserAttributes {
   final Map<String, dynamic>? data;
   UserAttributes({this.data});
 }
+
 enum OtpType { sms, email }
 
 class PostgrestQueryBuilder {
   final String table;
   PostgrestQueryBuilder(this.table);
   
-  PostgrestFilterBuilder select([String columns = '*']) {
-    return PostgrestFilterBuilder(table);
-  }
-  
-  PostgrestFilterBuilder insert(Map<String, dynamic> data) {
-    return PostgrestFilterBuilder(table);
-  }
-  
-  PostgrestFilterBuilder upsert(Map<String, dynamic> data) {
-    return PostgrestFilterBuilder(table);
-  }
-  
-  PostgrestFilterBuilder update(Map<String, dynamic> data) {
-    return PostgrestFilterBuilder(table);
-  }
+  PostgrestFilterBuilder select([String columns = '*']) => PostgrestFilterBuilder(table);
+  PostgrestFilterBuilder insert(Map<String, dynamic> data) => PostgrestFilterBuilder(table)..data = data;
+  PostgrestFilterBuilder upsert(Map<String, dynamic> data) => PostgrestFilterBuilder(table)..data = data;
+  PostgrestFilterBuilder update(Map<String, dynamic> data) => PostgrestFilterBuilder(table)..data = data;
 }
 
 class PostgrestFilterBuilder {
-  Future<dynamic> single() async { return {}; }
-
   final String table;
+  Map<String, dynamic>? data;
   PostgrestFilterBuilder(this.table);
   
-  PostgrestFilterBuilder select([String columns = '*']) {
-    return this;
-  }
-  
-  PostgrestTransformBuilder eq(String column, dynamic value) {
-    return PostgrestTransformBuilder(table);
-  }
-  
-  PostgrestTransformBuilder or(String filter) {
-    return PostgrestTransformBuilder(table);
-  }
+  Future<dynamic> single() async { return data ?? {}; }
+  PostgrestFilterBuilder select([String columns = '*']) => this;
+  PostgrestTransformBuilder eq(String column, dynamic value) => PostgrestTransformBuilder(table);
+  PostgrestTransformBuilder or(String filter) => PostgrestTransformBuilder(table);
   
   Future<List<dynamic>> then<T>(Future<List<dynamic>> Function(List<dynamic>) onValue, {Function? onError}) async {
     return onValue([]);
   }
   
-  Future<dynamic> get asFuture async => [];
+  Future<dynamic> get asFuture async => data != null ? data : [];
 }
 
 class PostgrestTransformBuilder {
   final String table;
   PostgrestTransformBuilder(this.table);
   
-  Future<dynamic> single() async {
-    return {};
-  }
-  
-  PostgrestTransformBuilder order(String column, {bool ascending = false}) {
-    return this;
-  }
-  
-  Future<List<dynamic>> then<T>(Future<List<dynamic>> Function(List<dynamic>) onValue, {Function? onError}) async {
-    return onValue([]);
-  }
+  Future<dynamic> single() async => {};
+  PostgrestTransformBuilder order(String column, {bool ascending = false}) => this;
+  Future<List<dynamic>> then<T>(Future<List<dynamic>> Function(List<dynamic>) onValue, {Function? onError}) async => onValue([]);
 }
 
 class SupabaseStorageClient {
-  StorageFileApi from(String bucket) {
-    return StorageFileApi(bucket);
-  }
+  StorageFileApi from(String bucket) => StorageFileApi(bucket);
 }
 
 class StorageFileApi {
   final String bucket;
   StorageFileApi(this.bucket);
   
-  Future<String> upload(String path, File file, {FileOptions? fileOptions}) async {
-    return path;
-  }
-  
-  String getPublicUrl(String path) {
-    return 'https://mock.url/$bucket/$path';
-  }
+  Future<String> upload(String path, File file, {FileOptions? fileOptions}) async => path;
+  String getPublicUrl(String path) => 'https://mock.url/\$bucket/\$path';
 }
 
 class FileOptions {

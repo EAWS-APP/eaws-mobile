@@ -1,8 +1,8 @@
+import 'package:eaws_app/core/api_client.dart';
 import 'package:eaws_app/core/supabase_mock.dart';
 
 class SosApi {
   SosApi._();
-
   static final SosApi instance = SosApi._();
 
   Future<Map<String, dynamic>> createSos({
@@ -12,25 +12,16 @@ class SosApi {
     required String locationName,
   }) async {
     try {
-      final user = Supabase.instance.client.auth.currentUser;
-      final data = await Supabase.instance.client.from('incidents').insert({
-        'emergency_type': 'SOS',
-        'category': 'SOS',
-        'title': 'Emergency SOS',
-        'description': 'Citizen triggered emergency SOS broadcast.',
-        'is_anonymous': false,
-        'location_name': locationName,
-        'address': locationName,
+      final res = await EawsApiClient.instance.post('/sos', body: {
+        'sos_type': 'general',
         'latitude': latitude,
         'longitude': longitude,
-        'accuracy_meters': accuracy,
-        'user_id': user?.id,
-        'status': 'active',
-      }).select().single();
-      return data;
+        'location_name': locationName,
+        'metadata': {'accuracy_meters': accuracy},
+      });
+      return res['sos_case'] ?? res['incident'] ?? {'id': 'mock-uuid', 'status': 'active'};
     } catch (e) {
-      print('Failed to write SOS to Supabase (table might not exist): $e');
-      // Return a mock payload so the UI proceeds to "Dispatched" state instead of hanging
+      print('Failed to write SOS to Backend: $e');
       return {
         'id': 'mock-incident-${DateTime.now().millisecondsSinceEpoch}',
         'status': 'active'
@@ -41,14 +32,10 @@ class SosApi {
   Future<void> cancelSos(String incidentId) async {
     try {
       if (!incidentId.startsWith('mock-')) {
-        await Supabase.instance.client
-            .from('incidents')
-            .update({'status': 'resolved'})
-            .eq('id', incidentId);
+        await EawsApiClient.instance.patch('/sos/$incidentId', body: {'status': 'resolved'});
       }
     } catch (e) {
-      print('Failed to cancel SOS in Supabase: $e');
+      print('Failed to cancel SOS: $e');
     }
   }
 }
-
