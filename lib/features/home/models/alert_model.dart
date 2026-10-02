@@ -7,9 +7,9 @@ class AlertModel {
   final String title;
   final String description;
   final AlertSeverity severity;
-  final String icon;          // Lucide icon name hint (e.g. 'wind', 'cloud-rain')
+  final String icon; // Lucide icon name hint (e.g. 'wind', 'cloud-rain')
   final DateTime createdAt;
-  final DateTime? expiresAt;  // null = no expiry
+  final DateTime? expiresAt; // null = no expiry
   final List<String> checklist; // Actionable safety steps
 
   const AlertModel({
@@ -23,7 +23,7 @@ class AlertModel {
     this.checklist = const [],
   });
 
-  /// Construct from a Supabase row (Map).
+  /// Construct from an API response (Map).
   factory AlertModel.fromMap(Map<String, dynamic> map) {
     return AlertModel(
       id: map['id']?.toString() ?? '',

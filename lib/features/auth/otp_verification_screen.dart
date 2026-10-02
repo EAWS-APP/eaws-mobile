@@ -7,11 +7,13 @@ import '../dashboard/dashboard_screen.dart';
 import 'auth_service.dart';
 
 class OTPVerificationScreen extends StatefulWidget {
-  final String phoneNumber;
+  final String email;
+  final bool isRegistration;
 
   const OTPVerificationScreen({
     super.key,
-    required this.phoneNumber,
+    required this.email,
+    this.isRegistration = false,
   });
 
   @override
@@ -20,7 +22,10 @@ class OTPVerificationScreen extends StatefulWidget {
 
 class _OTPVerificationScreenState extends State<OTPVerificationScreen> {
   final List<FocusNode> _focusNodes = List.generate(6, (_) => FocusNode());
-  final List<TextEditingController> _controllers = List.generate(6, (_) => TextEditingController());
+  final List<TextEditingController> _controllers = List.generate(
+    6,
+    (_) => TextEditingController(),
+  );
   bool _isLoading = false;
   String _errorMessage = '';
 
@@ -72,20 +77,25 @@ class _OTPVerificationScreenState extends State<OTPVerificationScreen> {
 
   Future<void> _handleResendCode() async {
     if (!_canResend) return;
-    
+
     setState(() {
       _isLoading = true;
       _errorMessage = '';
     });
 
-    await AuthService.instance.sendOTP(widget.phoneNumber);
+    final sent = await AuthService.instance.sendOTP(widget.email);
 
-    setState(() {
-      _isLoading = false;
-    });
+    if (!mounted) return;
+    setState(() => _isLoading = false);
+    if (!sent) {
+      setState(
+        () => _errorMessage = 'Could not resend the code. Try again later.',
+      );
+      return;
+    }
 
     _startTimer();
-    
+
     // Focus back on first box
     _focusNodes[0].requestFocus();
     for (var controller in _controllers) {
@@ -103,7 +113,7 @@ class _OTPVerificationScreenState extends State<OTPVerificationScreen> {
   Future<void> _handleVerifyOTP() async {
     // Combine values of the 6 text fields
     final otpCode = _controllers.map((c) => c.text).join();
-    
+
     if (otpCode.length < 6) {
       setState(() {
         _errorMessage = 'Please enter all 6 digits of the verification code.';
@@ -116,8 +126,11 @@ class _OTPVerificationScreenState extends State<OTPVerificationScreen> {
       _errorMessage = '';
     });
 
-    final success = await AuthService.instance.verifyOTP(widget.phoneNumber, otpCode);
+    final success = widget.isRegistration
+        ? await AuthService.instance.verifyEmailCode(widget.email, otpCode)
+        : await AuthService.instance.verifyOTP(widget.email, otpCode);
 
+    if (!mounted) return;
     setState(() {
       _isLoading = false;
     });
@@ -127,9 +140,7 @@ class _OTPVerificationScreenState extends State<OTPVerificationScreen> {
         // Success Transition with full screen navigation
         Navigator.pushAndRemoveUntil(
           context,
-          MaterialPageRoute(
-            builder: (context) => const DashboardScreen(),
-          ),
+          MaterialPageRoute(builder: (context) => const DashboardScreen()),
           (route) => false,
         );
       }
@@ -205,21 +216,21 @@ class _OTPVerificationScreenState extends State<OTPVerificationScreen> {
                       const SizedBox(height: 4),
                       const Text(
                         'Emergency Verification Module',
-                        style: TextStyle(
-                          color: Colors.white70,
-                          fontSize: 14,
-                        ),
+                        style: TextStyle(color: Colors.white70, fontSize: 14),
                       ),
                     ],
                   ],
                 ),
               ),
-              
+
               // Code verification card
               Expanded(
                 flex: 8,
                 child: Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 24.0, vertical: 28.0),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 24.0,
+                    vertical: 28.0,
+                  ),
                   decoration: const BoxDecoration(
                     color: Colors.white,
                     borderRadius: BorderRadius.only(
@@ -235,15 +246,16 @@ class _OTPVerificationScreenState extends State<OTPVerificationScreen> {
                         const SizedBox(height: 4),
                         Text(
                           'Verify Code',
-                          style: Theme.of(context).textTheme.displayLarge?.copyWith(
-                            fontSize: 28,
-                            fontWeight: FontWeight.bold,
-                            color: AppTheme.textPrimary,
-                          ),
+                          style: Theme.of(context).textTheme.displayLarge
+                              ?.copyWith(
+                                fontSize: 28,
+                                fontWeight: FontWeight.bold,
+                                color: AppTheme.textPrimary,
+                              ),
                         ),
                         const SizedBox(height: 8),
-                        
-                        // Dynamic Phone display
+
+                        // Dynamic email display
                         RichText(
                           text: TextSpan(
                             text: "We've sent a 6-digit verification code to ",
@@ -254,7 +266,7 @@ class _OTPVerificationScreenState extends State<OTPVerificationScreen> {
                             ),
                             children: [
                               TextSpan(
-                                text: widget.phoneNumber,
+                                text: widget.email,
                                 style: const TextStyle(
                                   fontWeight: FontWeight.bold,
                                   color: AppTheme.textPrimary,
@@ -264,38 +276,9 @@ class _OTPVerificationScreenState extends State<OTPVerificationScreen> {
                           ),
                         ),
                         const SizedBox(height: 32),
-                        
-                        // Verification simulation info alert banner
-                        Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-                          decoration: BoxDecoration(
-                            color: const Color(0xFFFEF3C7),
-                            borderRadius: BorderRadius.circular(12),
-                            border: Border.all(color: const Color(0xFFFDE68A)),
-                          ),
-                          child: Row(
-                            children: const [
-                              Icon(
-                                LucideIcons.info,
-                                color: Color(0xFFD97706),
-                                size: 18,
-                              ),
-                              SizedBox(width: 10),
-                              Expanded(
-                                child: Text(
-                                  '💡 Simulation Mode: Enter code 123456 to verify.',
-                                  style: TextStyle(
-                                    color: Color(0xFF92400E),
-                                    fontWeight: FontWeight.w600,
-                                    fontSize: 13,
-                                  ),
-                                ),
-                              ),
-                            ],
-                          ),
-                        ),
+
                         const SizedBox(height: 28),
-                        
+
                         // OTP Box Inputs
                         Row(
                           mainAxisAlignment: MainAxisAlignment.spaceBetween,
@@ -345,12 +328,13 @@ class _OTPVerificationScreenState extends State<OTPVerificationScreen> {
                                     ),
                                   ),
                                 ),
-                                onChanged: (value) => _onOTPChanged(value, index),
+                                onChanged: (value) =>
+                                    _onOTPChanged(value, index),
                               ),
                             );
                           }),
                         ),
-                        
+
                         // Display error message
                         if (_errorMessage.isNotEmpty) ...[
                           const SizedBox(height: 16),
@@ -376,7 +360,7 @@ class _OTPVerificationScreenState extends State<OTPVerificationScreen> {
                           ),
                         ],
                         const SizedBox(height: 36),
-                        
+
                         // Verify Code Button
                         SizedBox(
                           width: double.infinity,
@@ -397,7 +381,9 @@ class _OTPVerificationScreenState extends State<OTPVerificationScreen> {
                                     width: 20,
                                     child: CircularProgressIndicator(
                                       strokeWidth: 2,
-                                      valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
+                                      valueColor: AlwaysStoppedAnimation<Color>(
+                                        Colors.white,
+                                      ),
                                     ),
                                   )
                                 : Row(
@@ -411,16 +397,13 @@ class _OTPVerificationScreenState extends State<OTPVerificationScreen> {
                                         ),
                                       ),
                                       SizedBox(width: 8),
-                                      Icon(
-                                        LucideIcons.shieldCheck,
-                                        size: 18,
-                                      ),
+                                      Icon(LucideIcons.shieldCheck, size: 18),
                                     ],
                                   ),
                           ),
                         ),
                         const SizedBox(height: 28),
-                        
+
                         // Countdown & Resend Code options
                         Center(
                           child: Column(
@@ -472,13 +455,17 @@ class _OTPVerificationScreenState extends State<OTPVerificationScreen> {
                                 ),
                               ],
                               const SizedBox(height: 36),
-                              
-                              // Change phone link
+
+                              // Change email link
                               TextButton.icon(
                                 onPressed: () => Navigator.pop(context),
-                                icon: const Icon(LucideIcons.phone, size: 16, color: AppTheme.textSecondary),
+                                icon: const Icon(
+                                  LucideIcons.mail,
+                                  size: 16,
+                                  color: AppTheme.textSecondary,
+                                ),
                                 label: const Text(
-                                  'Edit Phone Number',
+                                  'Edit Email Address',
                                   style: TextStyle(
                                     color: AppTheme.textSecondary,
                                     fontWeight: FontWeight.bold,

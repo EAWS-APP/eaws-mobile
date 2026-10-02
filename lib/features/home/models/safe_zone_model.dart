@@ -7,9 +7,9 @@ class SafeZoneModel {
   final String address;
   final double latitude;
   final double longitude;
-  final String status;       // 'open', 'full', 'closed'
-  final int? capacity;       // Total capacity (optional)
-  final int? currentCount;   // Current occupancy (optional)
+  final String status; // 'open', 'full', 'closed'
+  final int? capacity; // Total capacity (optional)
+  final int? currentCount; // Current occupancy (optional)
   final DateTime updatedAt;
 
   const SafeZoneModel({
@@ -24,7 +24,7 @@ class SafeZoneModel {
     required this.updatedAt,
   });
 
-  /// Construct from a Supabase row (Map).
+  /// Construct from an API response (Map).
   factory SafeZoneModel.fromMap(Map<String, dynamic> map) {
     return SafeZoneModel(
       id: map['id']?.toString() ?? '',
@@ -47,7 +47,8 @@ class SafeZoneModel {
     const earthRadius = 6371.0; // km
     final dLat = _degToRad(latitude - userLat);
     final dLon = _degToRad(longitude - userLon);
-    final a = sin(dLat / 2) * sin(dLat / 2) +
+    final a =
+        sin(dLat / 2) * sin(dLat / 2) +
         cos(_degToRad(userLat)) *
             cos(_degToRad(latitude)) *
             sin(dLon / 2) *

@@ -1,7 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
-import 'dart:ui' as ui;
+import 'dart:math';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:geolocator/geolocator.dart';
@@ -9,14 +9,14 @@ import 'package:lucide_icons/lucide_icons.dart';
 import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
-import 'package:supabase_flutter/supabase_flutter.dart';
-import '../../core/theme.dart';
 import '../../core/api_client.dart';
+import '../../core/theme.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'sos_api.dart';
 
 // Global notifier to control Dashboard bottom nav visibility
 final ValueNotifier<bool> globalSosActiveNotifier = ValueNotifier(false);
+const bool _demoMode = bool.fromEnvironment('EAWS_DEMO_MODE');
 
 class SOSScreen extends StatefulWidget {
   final bool startImmediately;
@@ -30,12 +30,33 @@ class SOSScreen extends StatefulWidget {
 class _SOSScreenState extends State<SOSScreen> with TickerProviderStateMixin {
   bool _isSOSActive = false;
   bool _isCountingDown = false;
-  int _countdownSeconds = 10;
+  bool _smsDraftReady = false;
+  String? _smsPreview;
+  int _countdownSeconds = 7;
   Timer? _countdownTimer;
+  Timer? _statusPollTimer;
+  String? _clientEventId;
   String? _activeIncidentId;
+  String _incidentStatus = 'sent';
+  final TextEditingController _messageController = TextEditingController();
+  String? _pendingMessageId;
+  String? _messageSendError;
+  bool _messageSending = false;
+  String? _operatorName;
+  String? _dispatchUnit;
+  int? _etaMinutes;
+  List<Map<String, dynamic>> _messages = [];
+  bool _messagesUnavailable = false;
+  bool _statusUnavailable = false;
+  bool _cancelRequested = false;
+  bool _submissionInProgress = false;
+  bool _localRecoveryUnavailable = false;
+  bool _citizenReportedSafe = false;
+  String? _resolvedOutcome;
+  DateTime? _resolvedAt;
   double? _latitude;
   double? _longitude;
-  String _address = 'Acquiring GPS location...';
+  String _address = 'Location not shared';
   double? _gpsAccuracy;
   bool _isSilentMode = false;
   double _readinessScore = 95.0;
@@ -47,17 +68,7 @@ class _SOSScreenState extends State<SOSScreen> with TickerProviderStateMixin {
   Timer? _backgroundTrackingTimer;
   StreamSubscription<List<ConnectivityResult>>? _connectivitySubscription;
 
-  // Responder Tracking
-  bool _isDispatched = false;
-  double? _responderLat;
-  double? _responderLng;
-  String _responderETA = '~8 mins';
-  String _responderName = 'Police Response Unit';
   GoogleMapController? _mapController;
-  Timer? _simulationTimer;
-  Timer? _blinkTimer;
-  bool _isRedDotVisible = true;
-  BitmapDescriptor? _responderIcon;
 
   // Radar pulsing animation
   late AnimationController _radarController;
@@ -66,6 +77,53 @@ class _SOSScreenState extends State<SOSScreen> with TickerProviderStateMixin {
   // Flashing alert color animation
   late AnimationController _flashController;
   late Animation<Color?> _flashColorAnimation;
+
+  String get _statusText {
+    final unit = _dispatchUnit ?? 'The response unit';
+    switch (_incidentStatus) {
+      case 'sent':
+        return 'Sent, waiting for operator';
+      case 'acknowledged':
+        return 'Acknowledged by ${_operatorName ?? 'operator'}';
+      case 'dispatched':
+        return '$unit dispatched';
+      case 'en_route':
+        return '$unit en route${_etaMinutes == null ? '' : ', about $_etaMinutes min'}';
+      case 'on_scene':
+        return '$unit on scene';
+      case 'resolved':
+        return 'Case closed by ${_operatorName ?? 'operator'}';
+      case 'retracted':
+        return 'SOS retracted by you';
+      case 'sms_unconfirmed':
+        return 'SMS sent, waiting for confirmation';
+      default:
+        return 'SOS not confirmed by the server';
+    }
+  }
+
+  String _messageDeliveryLabel(Object? deliveryState, {Object? readState}) {
+    if (deliveryState?.toString() == 'fetched_by_citizen_app' &&
+        readState?.toString() == 'read') {
+      return 'Read in this app · TEST';
+    }
+    switch (deliveryState?.toString()) {
+      case 'fetched_by_citizen_app':
+        return 'Received by this app · TEST';
+      case 'received_by_dispatch':
+        return 'Received by dispatcher · TEST';
+      case 'awaiting_citizen_poll':
+        return 'Saved on TEST server · waiting for app poll';
+      case 'test_only_not_delivered':
+        return 'TEST only · delivery not verified';
+      case 'delivered':
+        return 'Delivered';
+      case 'read':
+        return 'Read';
+      default:
+        return 'Delivery status unavailable';
+    }
+  }
 
   @override
   void initState() {
@@ -91,10 +149,12 @@ class _SOSScreenState extends State<SOSScreen> with TickerProviderStateMixin {
       end: const Color(0xFFDC2626), // errorColor
     ).animate(_flashController);
 
-    // If navigated from home screen SOS holding
+    final restoreFuture = _restoreActiveSos();
+
     if (widget.startImmediately) {
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        _triggerCountdown();
+      WidgetsBinding.instance.addPostFrameCallback((_) async {
+        await restoreFuture;
+        if (mounted) _triggerCountdown();
       });
     }
 
@@ -106,17 +166,21 @@ class _SOSScreenState extends State<SOSScreen> with TickerProviderStateMixin {
       final isOffline = results.every(
         (result) => result == ConnectivityResult.none,
       );
-      if (mounted && !isOffline && _isSOSActive && _activeIncidentId == null) {
-        // Internet came back, and we haven't successfully created an incident yet!
+      if (mounted && !isOffline && _isSOSActive && !_submissionInProgress) {
+        if (_cancelRequested && _activeIncidentId != null) {
+          unawaited(_retryPendingRetraction());
+          return;
+        }
+        if (_activeIncidentId != null) return;
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
             content: Text(
-              'Connection restored. Switching to live telemetry...',
+              'Connection restored. Retrying this SOS with the same event ID.',
             ),
             backgroundColor: AppTheme.successColor,
           ),
         );
-        _activateSOSBroadcast();
+        _submitSos();
       }
     });
   }
@@ -143,11 +207,11 @@ class _SOSScreenState extends State<SOSScreen> with TickerProviderStateMixin {
   @override
   void dispose() {
     _countdownTimer?.cancel();
+    _statusPollTimer?.cancel();
     _backgroundTrackingTimer?.cancel();
-    _simulationTimer?.cancel();
-    _blinkTimer?.cancel();
     _connectivitySubscription?.cancel();
     _mapController?.dispose();
+    _messageController.dispose();
     _radarController.dispose();
     _flashController.dispose();
     globalSosActiveNotifier.value = false;
@@ -155,17 +219,22 @@ class _SOSScreenState extends State<SOSScreen> with TickerProviderStateMixin {
   }
 
   void _triggerCountdown() {
-    // Vibrate device briefly to notify user SOS triggered
+    if (_isCountingDown || _isSOSActive) return;
     HapticFeedback.vibrate();
 
     setState(() {
       _isCountingDown = true;
-      _countdownSeconds = 10;
-      _isSOSActive = false;
+      _countdownSeconds = 7;
+      _isSOSActive = true;
       _isSilentModeUnlocked = false;
       _enteredPin = '';
+      _cancelRequested = false;
+      _clientEventId = _newClientEventId();
+      _activeIncidentId = null;
     });
     globalSosActiveNotifier.value = true;
+    _flashController.repeat(reverse: true);
+    unawaited(_persistThenSubmit());
 
     _countdownTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
       if (_countdownSeconds > 1) {
@@ -175,377 +244,460 @@ class _SOSScreenState extends State<SOSScreen> with TickerProviderStateMixin {
         HapticFeedback.lightImpact();
       } else {
         timer.cancel();
-        _activateSOSBroadcast();
+        if (mounted) {
+          setState(() => _isCountingDown = false);
+        }
       }
     });
   }
 
+  String _newClientEventId() {
+    final randomPart = Random.secure().nextInt(0x7fffffff).toRadixString(16);
+    return 'SOS-${DateTime.now().toUtc().microsecondsSinceEpoch}-$randomPart';
+  }
+
+  Future<void> _persistPendingSos() async {
+    final eventId = _clientEventId;
+    if (eventId == null) return;
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString('eaws_active_sos_client_event_id', eventId);
+    await prefs.setBool('eaws_active_sos_cancel_requested', _cancelRequested);
+    final incidentId = _activeIncidentId;
+    if (incidentId != null) {
+      await prefs.setString('eaws_active_sos_incident_id', incidentId);
+    }
+  }
+
+  Future<void> _persistThenSubmit() async {
+    try {
+      await _persistPendingSos();
+    } catch (error) {
+      if (mounted) setState(() => _localRecoveryUnavailable = true);
+      debugPrint('Could not persist SOS retry key before sending: $error');
+    }
+    if (mounted) await _submitSos();
+  }
+
+  Future<void> _restoreActiveSos() async {
+    final SharedPreferences prefs;
+    try {
+      prefs = await SharedPreferences.getInstance();
+    } catch (error) {
+      if (mounted) setState(() => _localRecoveryUnavailable = true);
+      debugPrint('Could not restore pending SOS state: $error');
+      return;
+    }
+    final eventId = prefs.getString('eaws_active_sos_client_event_id');
+    final incidentId = prefs.getString('eaws_active_sos_incident_id');
+    final cancelRequested =
+        prefs.getBool('eaws_active_sos_cancel_requested') ?? false;
+    if (!mounted || eventId == null) return;
+    setState(() {
+      _clientEventId = eventId;
+      _activeIncidentId = incidentId;
+      _cancelRequested = cancelRequested;
+      _isSOSActive = true;
+      _incidentStatus = incidentId == null ? 'sent' : _incidentStatus;
+    });
+    globalSosActiveNotifier.value = true;
+    if (incidentId != null) {
+      if (_cancelRequested) {
+        await _retryPendingRetraction();
+        return;
+      }
+      await _refreshIncidentState();
+      _startStatusPolling();
+    } else {
+      _submitSos();
+    }
+  }
+
   Future<void> _cancelSOS() async {
+    _cancelRequested = true;
     _countdownTimer?.cancel();
+    final incidentId = _activeIncidentId;
+    if (incidentId == null) {
+      if (!_submissionInProgress) unawaited(_submitSos());
+      if (mounted) {
+        setState(() {
+          _isCountingDown = false;
+          _incidentStatus = 'unconfirmed';
+        });
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text(
+              'Cancellation requested. The server has not confirmed receipt or retraction yet.',
+            ),
+            backgroundColor: AppTheme.warningColor,
+          ),
+        );
+      }
+      return;
+    }
+    if (incidentId.isNotEmpty) {
+      try {
+        await SosApi.instance.cancelSos(incidentId);
+      } catch (e) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text(
+              'Cancellation could not be confirmed. Your alert may still be active.',
+            ),
+            backgroundColor: AppTheme.errorColor,
+          ),
+        );
+        return;
+      }
+    }
+
+    _statusPollTimer?.cancel();
     _backgroundTrackingTimer?.cancel();
     _backgroundTrackingTimer = null;
-    _blinkTimer?.cancel();
     _flashController.stop();
-    final incidentId = _activeIncidentId;
     setState(() {
       _isCountingDown = false;
       _isSOSActive = false;
-      _activeIncidentId = null;
+      _showRecoveryScreen = true;
+      _incidentStatus = 'retracted';
+      _cancelRequested = false;
       _isSilentModeUnlocked = false;
       _enteredPin = '';
     });
     globalSosActiveNotifier.value = false;
-
-    if (incidentId != null) {
-      try {
-        await SosApi.instance.cancelSos(incidentId);
-      } catch (e) {
-        print('EAWS SOS cancel API unavailable: $e');
-      }
-    }
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.remove('eaws_active_sos_client_event_id');
+    await prefs.remove('eaws_active_sos_incident_id');
+    await prefs.remove('eaws_active_sos_cancel_requested');
+    _clientEventId = null;
+    _activeIncidentId = null;
 
     ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(
-        content: Text('Emergency dispatch cancelled.'),
-        backgroundColor: Colors.grey,
+      SnackBar(
+        content: Text(
+          incidentId == null
+              ? 'SOS cancelled before the server confirmed receipt.'
+              : 'SOS retracted by you. The control room must confirm receipt.',
+        ),
+        backgroundColor: incidentId == null
+            ? AppTheme.warningColor
+            : Colors.grey,
       ),
     );
   }
 
-  Future<void> _activateSOSBroadcast() async {
-    HapticFeedback.vibrate();
-    setState(() {
-      _isCountingDown = false;
-      _isSOSActive = true;
-      _address = 'Acquiring GPS location...';
-    });
-
-    // Repeat the red flashing beacon light animation
-    _flashController.repeat(reverse: true);
-
-    // 1. Check Internet Connectivity (Offline SMS Fallback)
-    final connectivityResult = await Connectivity().checkConnectivity();
-    if (connectivityResult == [ConnectivityResult.none] ||
-        connectivityResult.contains(ConnectivityResult.none)) {
-      _triggerOfflineSMSFallback();
-      return;
-    }
-
+  Future<void> _submitSos() async {
+    final eventId = _clientEventId;
+    if (eventId == null || _submissionInProgress) return;
+    _submissionInProgress = true;
     try {
-      // 2. Query high-accuracy GPS coordinates
-      final position = await Geolocator.getCurrentPosition(
-        desiredAccuracy: LocationAccuracy.high,
-        timeLimit: const Duration(seconds: 6),
+      final sos = await SosApi.instance.createSos(
+        clientEventId: eventId,
+        latitude: _latitude,
+        longitude: _longitude,
+        accuracy: _gpsAccuracy,
+        locationName: _latitude == null || _longitude == null ? null : _address,
       );
+      final incidentId = sos['id']?.toString();
+      if (incidentId == null || incidentId.isEmpty) {
+        throw const FormatException(
+          'SOS response did not include an incident ID.',
+        );
+      }
+      if (_cancelRequested) {
+        _activeIncidentId = incidentId;
+        try {
+          await _persistPendingSos();
+        } catch (error) {
+          if (mounted) setState(() => _localRecoveryUnavailable = true);
+          debugPrint('Could not persist SOS retraction state: $error');
+        }
+        await SosApi.instance.cancelSos(incidentId);
+        if (mounted) {
+          setState(() {
+            _incidentStatus = 'retracted';
+            _isSOSActive = false;
+            _showRecoveryScreen = true;
+            _cancelRequested = false;
+          });
+          globalSosActiveNotifier.value = false;
+        }
+        final prefs = await SharedPreferences.getInstance();
+        await prefs.remove('eaws_active_sos_client_event_id');
+        await prefs.remove('eaws_active_sos_incident_id');
+        await prefs.remove('eaws_active_sos_cancel_requested');
+        _clientEventId = null;
+        _activeIncidentId = null;
+        return;
+      }
+      if (!mounted) return;
+      setState(() {
+        _activeIncidentId = incidentId;
+        _incidentStatus = sos['status']?.toString() ?? 'sent';
+        _address = sos['location_name']?.toString() ?? 'Location not shared';
+        _smsDraftReady = false;
+      });
+      await _persistPendingSos();
+      _startBackgroundTracking();
+      _startStatusPolling();
+      unawaited(_shareLocationAfterSubmission());
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _incidentStatus = 'unconfirmed';
+        _address = _cancelRequested
+            ? 'Cancellation pending; server confirmation unavailable.'
+            : 'SOS not confirmed by the server. Retry when connected.';
+      });
+      if (!_cancelRequested) unawaited(_prepareSmsPreview());
+      if (_cancelRequested) {
+        unawaited(
+          _persistPendingSos().catchError((Object error) {
+            if (mounted) setState(() => _localRecoveryUnavailable = true);
+            debugPrint('Could not persist pending retraction: $error');
+          }),
+        );
+      }
+      debugPrint('SOS submission failed; idempotent event remains queued: $e');
+    } finally {
+      _submissionInProgress = false;
+    }
+  }
 
+  Future<void> _retryPendingRetraction() async {
+    final incidentId = _activeIncidentId;
+    if (incidentId == null || _submissionInProgress) return;
+    _submissionInProgress = true;
+    try {
+      await SosApi.instance.cancelSos(incidentId);
+      final incident = await SosApi.instance.getSos(incidentId);
+      if (incident['status'] != 'retracted' || !mounted) return;
+      setState(() {
+        _incidentStatus = 'retracted';
+        _isSOSActive = false;
+        _showRecoveryScreen = true;
+        _cancelRequested = false;
+      });
+      globalSosActiveNotifier.value = false;
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.remove('eaws_active_sos_client_event_id');
+      await prefs.remove('eaws_active_sos_incident_id');
+      await prefs.remove('eaws_active_sos_cancel_requested');
+      _clientEventId = null;
+      _activeIncidentId = null;
+    } catch (error) {
+      debugPrint('SOS retraction retry failed; request remains queued: $error');
+    } finally {
+      _submissionInProgress = false;
+    }
+  }
+
+  Future<void> _shareLocationAfterSubmission() async {
+    try {
+      final permission = await Geolocator.checkPermission();
+      if (permission != LocationPermission.always &&
+          permission != LocationPermission.whileInUse) {
+        if (mounted)
+          setState(() => _address = 'Location permission not granted');
+        return;
+      }
+      final position = await Geolocator.getCurrentPosition(
+        locationSettings: const LocationSettings(
+          accuracy: LocationAccuracy.high,
+          timeLimit: Duration(seconds: 4),
+        ),
+      );
+      if (!mounted) return;
       setState(() {
         _latitude = position.latitude;
         _longitude = position.longitude;
         _gpsAccuracy = position.accuracy;
+        _address =
+            '${position.latitude.toStringAsFixed(5)}, ${position.longitude.toStringAsFixed(5)}';
       });
-
-      // 3. Resolve address from OSM Nominatim reverse geocoder
-      String resolvedAddress =
-          '${position.latitude.toStringAsFixed(5)}, ${position.longitude.toStringAsFixed(5)}';
-      try {
-        final client = HttpClient();
-        final url = Uri.parse(
-          'https://nominatim.openstreetmap.org/reverse?format=json&lat=${position.latitude}&lon=${position.longitude}&zoom=18&addressdetails=1',
+      final incidentId = _activeIncidentId;
+      if (incidentId != null) {
+        await EawsApiClient.instance.patch(
+          '/incidents/${Uri.encodeComponent(incidentId)}',
+          body: {
+            'latitude': position.latitude,
+            'longitude': position.longitude,
+            'accuracy_meters': position.accuracy,
+          },
         );
-        final request = await client.getUrl(url);
-        request.headers.set(
-          'User-Agent',
-          'EAWSMobileApp/1.0 (masters@eaws.org)',
-        );
-        final response = await request.close();
-        final responseBody = await response.transform(utf8.decoder).join();
-        final data = json.decode(responseBody);
-        if (data != null && data['address'] != null) {
-          final addr = data['address'];
-          final poi =
-              addr['amenity'] ??
-              addr['building'] ??
-              addr['shop'] ??
-              addr['office'] ??
-              '';
-          final road = addr['road'] ?? addr['street'] ?? addr['highway'] ?? '';
-          final city = addr['city'] ?? addr['town'] ?? addr['village'] ?? '';
-          final country = addr['country'] ?? '';
-
-          List<String> parts = [];
-          if (poi.isNotEmpty) parts.add(poi);
-          if (road.isNotEmpty) parts.add(road);
-          if (city.isNotEmpty) parts.add(city);
-          if (parts.isEmpty && country.isNotEmpty) parts.add(country);
-
-          if (parts.isNotEmpty) {
-            resolvedAddress = parts.join(', ');
-          }
-        }
-      } catch (geocodingErr) {
-        print('Nominatim reverse geocoding unavailable: $geocodingErr');
       }
-
-      setState(() {
-        _address = resolvedAddress;
-      });
-
-      // 4. Connect to database backend
-      final sos = await SosApi.instance.createSos(
-        latitude: position.latitude,
-        longitude: position.longitude,
-        accuracy: position.accuracy,
-        locationName: resolvedAddress,
-      );
-
-      setState(() {
-        final incident = sos['incident'] ?? sos;
-        _activeIncidentId =
-            incident['id']?.toString() ?? incident['incident_id']?.toString();
-      });
-
-      // 5. Start background tracking timer
-      _startBackgroundTracking();
-
-      // 6. Start dispatch simulation
-      _startResponderSimulation();
-    } catch (e) {
-      print('EAWS SOS API unavailable, active visual state retained: $e');
-      setState(() {
-        _address = 'Emergency telemetry broadcasting offline...';
-      });
+    } catch (error) {
+      debugPrint('Best-effort SOS location update failed: $error');
     }
   }
 
-  Future<void> _triggerOfflineSMSFallback() async {
-    setState(() {
-      _address = 'Offline. Initiating SMS Emergency Fallback...';
-    });
+  void _startStatusPolling() {
+    _statusPollTimer?.cancel();
+    _statusPollTimer = Timer.periodic(
+      const Duration(seconds: 1),
+      (_) => _refreshIncidentState(),
+    );
+  }
 
-    double lat = 5.6037; // Default Accra latitude
-    double lng = -0.1870; // Default Accra longitude
-
+  Future<void> _refreshIncidentState() async {
+    final incidentId = _activeIncidentId;
+    if (incidentId == null) return;
     try {
-      final position = await Geolocator.getCurrentPosition(
-        desiredAccuracy: LocationAccuracy.medium,
-        timeLimit: const Duration(seconds: 4),
-      );
-      lat = position.latitude;
-      lng = position.longitude;
-      setState(() {
-        _latitude = lat;
-        _longitude = lng;
-        _gpsAccuracy = position.accuracy;
-      });
-    } catch (_) {
-      // Fallback coordinates if GPS times out
-      setState(() {
-        _latitude = lat;
-        _longitude = lng;
-      });
-    }
-
-    final String message =
-        'EAWS EMERGENCY SOS! CitizenEbenezar triggered alert. Location: Lat ${lat.toStringAsFixed(5)}, Lng ${lng.toStringAsFixed(5)} (https://maps.google.com/?q=$lat,$lng)';
-
-    // Include 112 + all saved emergency contacts (stripped of spaces for iOS compatibility)
-    String separator = Platform.isAndroid ? ';' : ',';
-    List<String> numbers = ['112'];
-    numbers.addAll(
-      _emergencyContacts.map(
-        (e) => e['phone'].toString().replaceAll(RegExp(r'\s+'), ''),
-      ),
-    );
-    final nums = numbers.join(separator);
-
-    final encodedBody = Uri.encodeComponent(message);
-    String bodyPrefix = Platform.isIOS ? '&body=' : '?body=';
-    final String urlString = 'sms:$nums$bodyPrefix$encodedBody';
-
-    final Uri smsUri = Uri.parse(urlString);
-
-    if (await canLaunchUrl(smsUri)) {
-      await launchUrl(smsUri);
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Offline SMS composer pre-populated and launched!'),
-          backgroundColor: AppTheme.errorColor,
-        ),
-      );
-    } else {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Failed to launch SMS composer automatically.'),
-          backgroundColor: AppTheme.errorColor,
-        ),
-      );
-    }
-  }
-
-  void _updateMapBounds() {
-    if (_mapController != null &&
-        _latitude != null &&
-        _longitude != null &&
-        _responderLat != null &&
-        _responderLng != null) {
-      _mapController!.animateCamera(
-        CameraUpdate.newLatLngBounds(
-          LatLngBounds(
-            southwest: LatLng(
-              _latitude! < _responderLat! ? _latitude! : _responderLat!,
-              _longitude! < _responderLng! ? _longitude! : _responderLng!,
-            ),
-            northeast: LatLng(
-              _latitude! > _responderLat! ? _latitude! : _responderLat!,
-              _longitude! > _responderLng! ? _longitude! : _responderLng!,
-            ),
-          ),
-          60.0, // padding
-        ),
-      );
-    }
-  }
-
-  // Create a high-resolution emoji marker for the map
-  Future<BitmapDescriptor> _createEmojiMarker(String emoji) async {
-    const double size = 120;
-    final ui.PictureRecorder recorder = ui.PictureRecorder();
-    final Canvas canvas = Canvas(recorder);
-
-    // Draw a white circle background
-    final Paint bgPaint = Paint()..color = Colors.white;
-    canvas.drawCircle(const Offset(size / 2, size / 2), size / 2, bgPaint);
-
-    // Draw a subtle border
-    final Paint borderPaint = Paint()
-      ..color = Colors.grey.shade300
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = 3;
-    canvas.drawCircle(
-      const Offset(size / 2, size / 2),
-      size / 2 - 1.5,
-      borderPaint,
-    );
-
-    // Draw the emoji text
-    final textPainter = TextPainter(
-      text: TextSpan(text: emoji, style: const TextStyle(fontSize: 60)),
-      textDirection: TextDirection.ltr,
-    );
-    textPainter.layout();
-    textPainter.paint(
-      canvas,
-      Offset((size - textPainter.width) / 2, (size - textPainter.height) / 2),
-    );
-
-    final ui.Image image = await recorder.endRecording().toImage(
-      size.toInt(),
-      size.toInt(),
-    );
-    final data = await image.toByteData(format: ui.ImageByteFormat.png);
-    return BitmapDescriptor.bytes(data!.buffer.asUint8List());
-  }
-
-  // Get emoji and unit name for the selected emergency category
-  String _getResponderEmoji() {
-    switch (_selectedCategory.toLowerCase()) {
-      case 'medical aid':
-        return '🚑';
-      case 'fire rescue':
-        return '🚒';
-      case 'natural disaster':
-        return '🚁';
-      case 'police / threat':
-      default:
-        return '🚓';
-    }
-  }
-
-  String _getResponderUnitName() {
-    switch (_selectedCategory.toLowerCase()) {
-      case 'medical aid':
-        return 'Ambulance Unit 07';
-      case 'fire rescue':
-        return 'Fire Engine Unit 12';
-      case 'natural disaster':
-        return 'Rescue Helicopter H3';
-      case 'police / threat':
-      default:
-        return 'Police Rapid Response Unit 04';
-    }
-  }
-
-  void _startResponderSimulation() {
-    _simulationTimer?.cancel();
-
-    // Start the blinking red dot for the user's location
-    _blinkTimer?.cancel();
-    _blinkTimer = Timer.periodic(const Duration(milliseconds: 600), (timer) {
-      if (mounted) {
-        setState(() {
-          _isRedDotVisible = !_isRedDotVisible;
-        });
-      } else {
-        timer.cancel();
-      }
-    });
-
-    // Simulate a dispatcher assigning a unit after 5 seconds
-    Future.delayed(const Duration(seconds: 5), () async {
-      if (!mounted || !_isSOSActive) return;
-
-      // Generate the responder vehicle marker based on category
-      final icon = await _createEmojiMarker(_getResponderEmoji());
-
+      final incident = await SosApi.instance.getSos(incidentId);
+      final status = incident['status']?.toString() ?? _incidentStatus;
       if (!mounted) return;
       setState(() {
-        _isDispatched = true;
-        _responderName = _getResponderUnitName();
-        _responderIcon = icon;
-        // Start responder ~2km away diagonally
-        _responderLat = (_latitude ?? 5.6037) + 0.015;
-        _responderLng = (_longitude ?? -0.1870) + 0.015;
+        _statusUnavailable = false;
+        _incidentStatus = status;
+        _operatorName = incident['operator_name']?.toString();
+        _dispatchUnit = incident['dispatch_unit']?.toString();
+        _etaMinutes = (incident['eta_minutes'] as num?)?.toInt();
+        _latitude = (incident['latitude'] as num?)?.toDouble();
+        _longitude = (incident['longitude'] as num?)?.toDouble();
+        _address =
+            incident['location_name']?.toString() ??
+            (_latitude != null && _longitude != null
+                ? '${_latitude!.toStringAsFixed(5)}, ${_longitude!.toStringAsFixed(5)}'
+                : 'Location not shared');
+        _citizenReportedSafe = incident['citizen_safe'] == true;
+        _resolvedOutcome = incident['outcome']?.toString();
+        _resolvedAt = DateTime.tryParse(
+          incident['resolved_at']?.toString() ?? '',
+        );
       });
-
-      // Animate responder moving toward user every 3 seconds
-      _simulationTimer = Timer.periodic(const Duration(seconds: 3), (timer) {
-        if (!mounted ||
-            !_isSOSActive ||
-            _latitude == null ||
-            _longitude == null) {
-          timer.cancel();
-          return;
+      try {
+        final messages = await SosApi.instance.getMessages(incidentId);
+        if (mounted) {
+          setState(() {
+            _messages = messages;
+            _messagesUnavailable = false;
+          });
         }
+      } catch (error) {
+        if (mounted) setState(() => _messagesUnavailable = true);
+        debugPrint('SOS messages unavailable: $error');
+      }
+      if (status == 'resolved' || status == 'retracted') {
+        _statusPollTimer?.cancel();
+        setState(() => _showRecoveryScreen = true);
+        globalSosActiveNotifier.value = false;
+        final prefs = await SharedPreferences.getInstance();
+        await prefs.remove('eaws_active_sos_client_event_id');
+        await prefs.remove('eaws_active_sos_incident_id');
+        await prefs.remove('eaws_active_sos_cancel_requested');
+        _cancelRequested = false;
+        _clientEventId = null;
+        _activeIncidentId = null;
+      }
+    } catch (error) {
+      if (mounted) setState(() => _statusUnavailable = true);
+      debugPrint(
+        'SOS status refresh failed; retaining last server state: $error',
+      );
+    }
+  }
 
-        setState(() {
-          // Move responder 10% closer each tick
-          _responderLat = _responderLat! + (_latitude! - _responderLat!) * 0.1;
-          _responderLng = _responderLng! + (_longitude! - _responderLng!) * 0.1;
+  Future<void> _sendCitizenMessage() async {
+    final incidentId = _activeIncidentId;
+    final content = _messageController.text.trim();
+    if (incidentId == null ||
+        content.isEmpty ||
+        content.length > 2000 ||
+        _messageSending) {
+      return;
+    }
 
-          double dist = Geolocator.distanceBetween(
-            _latitude!,
-            _longitude!,
-            _responderLat!,
-            _responderLng!,
-          );
-          if (dist < 50) {
-            _responderETA = 'Arriving now';
-            timer.cancel();
-            // Auto-transition to recovery screen after 3 seconds
-            Future.delayed(const Duration(seconds: 3), () {
-              if (mounted && _isSOSActive) {
-                _stopSOS();
-              }
-            });
-          } else {
-            int mins = (dist / 400).ceil(); // Assuming ~24km/h speed
-            _responderETA = '~$mins mins';
-          }
-        });
-
-        _updateMapBounds();
-      });
+    _pendingMessageId ??=
+        'TEST-MOBILE-MESSAGE-${DateTime.now().toUtc().microsecondsSinceEpoch}-'
+        '${Random.secure().nextInt(0x7fffffff).toRadixString(16)}';
+    setState(() {
+      _messageSending = true;
+      _messageSendError = null;
     });
+    try {
+      await SosApi.instance.sendMessage(
+        incidentId: incidentId,
+        content: content,
+        clientMessageId: _pendingMessageId!,
+      );
+      if (!mounted) return;
+      _messageController.clear();
+      _pendingMessageId = null;
+      if (mounted) await _refreshIncidentState();
+    } catch (error) {
+      if (mounted) {
+        setState(() {
+          _messageSendError =
+              'Message was not confirmed. Keep this draft and retry.';
+        });
+      }
+      debugPrint('Citizen TEST message failed: $error');
+    } finally {
+      if (mounted) setState(() => _messageSending = false);
+    }
+  }
+
+  Future<void> _prepareSmsPreview() async {
+    final coordinates = _latitude != null && _longitude != null
+        ? 'Coordinates: ${_latitude!.toStringAsFixed(5)}, ${_longitude!.toStringAsFixed(5)} (±${_gpsAccuracy?.toStringAsFixed(0) ?? "unknown"}m)'
+        : 'Coordinates: unavailable';
+    final eventId = _clientEventId ?? 'not assigned';
+    final message =
+        'EAWS TEST SOS · Event $eventId · ${DateTime.now().toUtc().toIso8601String()} · $coordinates · Citizen requests help.';
+    if (!mounted) return;
+    setState(() {
+      _smsPreview = message;
+      _smsDraftReady = true;
+      _address = 'SMS preview ready; no SMS was sent.';
+    });
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text(
+          'Offline test preview only. No recipient is configured and nothing was sent.',
+        ),
+        backgroundColor: AppTheme.warningColor,
+        behavior: SnackBarBehavior.floating,
+      ),
+    );
+  }
+
+  Future<void> _callControl() async {
+    if (_demoMode) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'DEMO MODE: call controls are disabled; no call was placed.',
+          ),
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+      return;
+    }
+    const controlRoomNumber = String.fromEnvironment('EAWS_CONTROL_ROOM_PHONE');
+    if (controlRoomNumber.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'Control room phone is not configured. No call was placed.',
+          ),
+          backgroundColor: AppTheme.errorColor,
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+      return;
+    }
+    final telUri = Uri(scheme: 'tel', path: controlRoomNumber);
+    if (await canLaunchUrl(telUri)) {
+      await launchUrl(telUri);
+    } else if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Could not open the phone dialer. No call was placed.'),
+          backgroundColor: AppTheme.errorColor,
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+    }
   }
 
   void _startBackgroundTracking() {
@@ -568,15 +720,13 @@ class _SOSScreenState extends State<SOSScreen> with TickerProviderStateMixin {
           _gpsAccuracy = position.accuracy;
         });
 
-        if (!incidentId.startsWith('mock-')) {
-          await Supabase.instance.client
-              .from('incidents')
-              .update({
-                'latitude': position.latitude,
-                'longitude': position.longitude,
-              })
-              .eq('id', incidentId);
-        }
+        await EawsApiClient.instance.patch(
+          '/incidents/${Uri.encodeComponent(incidentId)}',
+          body: {
+            'latitude': position.latitude,
+            'longitude': position.longitude,
+          },
+        );
 
         print(
           'EAWS Telemetry background sync successful: ${position.latitude}, ${position.longitude}',
@@ -588,53 +738,116 @@ class _SOSScreenState extends State<SOSScreen> with TickerProviderStateMixin {
   }
 
   Future<void> _stopSOS() async {
-    _flashController.stop();
-    _backgroundTrackingTimer?.cancel();
-    _backgroundTrackingTimer = null;
-    _blinkTimer?.cancel();
+    final safe = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Are you safe?'),
+        content: const Text(
+          'The operator will be told that you reported yourself safe. They must close the case.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Keep SOS active'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('I am safe'),
+          ),
+        ],
+      ),
+    );
+    if (safe != true || !mounted) return;
     final incidentId = _activeIncidentId;
-    setState(() {
-      _isSOSActive = false;
-      _isCountingDown = false;
-      _activeIncidentId = null;
-      _showRecoveryScreen = true;
-      _isSilentModeUnlocked = false;
-      _enteredPin = '';
-    });
-    globalSosActiveNotifier.value = true;
-
-    if (incidentId != null) {
-      try {
-        await SosApi.instance.cancelSos(incidentId);
-      } catch (e) {
-        print('EAWS SOS cancel API unavailable: $e');
-      }
-    } else {
-      // Offline fallback cancellation via SMS
-      final String message =
-          'FALSE ALARM. I am safe. Disregard previous EAWS SOS.';
-      String separator = Platform.isAndroid ? ';' : ',';
-      List<String> numbers = ['112'];
-      numbers.addAll(
-        _emergencyContacts.map(
-          (e) => e['phone'].toString().replaceAll(RegExp(r'\s+'), ''),
+    if (incidentId == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'The SOS has not been confirmed by the server, so your safe status could not be sent.',
+          ),
+          backgroundColor: AppTheme.errorColor,
+          behavior: SnackBarBehavior.floating,
         ),
       );
-      final nums = numbers.join(separator);
-
-      final encodedBody = Uri.encodeComponent(message);
-      String bodyPrefix = Platform.isIOS ? '&body=' : '?body=';
-      final Uri smsUri = Uri.parse('sms:$nums$bodyPrefix$encodedBody');
-
-      if (await canLaunchUrl(smsUri)) {
-        await launchUrl(smsUri);
-      }
+      return;
     }
+    try {
+      await SosApi.instance.reportSafe(incidentId);
+      if (!mounted) return;
+      _backgroundTrackingTimer?.cancel();
+      _backgroundTrackingTimer = null;
+      setState(() {
+        _citizenReportedSafe = true;
+        _showRecoveryScreen = true;
+      });
+      globalSosActiveNotifier.value = false;
+      await _refreshIncidentState();
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Could not send safe status: $error'),
+          backgroundColor: AppTheme.errorColor,
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+    }
+  }
 
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(
-        content: Text('Emergency broadcast muted.'),
-        backgroundColor: AppTheme.successColor,
+  Future<void> _showFirstAid() async {
+    await showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      showDragHandle: true,
+      builder: (context) => SafeArea(
+        child: SingleChildScrollView(
+          padding: const EdgeInsets.fromLTRB(24, 8, 24, 32),
+          child: const Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                'First aid',
+                style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold),
+              ),
+              SizedBox(height: 8),
+              Text(
+                'Offline quick guidance. Follow instructions from qualified responders when available.',
+              ),
+              SizedBox(height: 20),
+              Text(
+                'Check safety',
+                style: TextStyle(fontWeight: FontWeight.bold),
+              ),
+              Text(
+                'Do not enter an unsafe scene. Ask someone nearby to contact local emergency services and bring an AED if available.',
+              ),
+              SizedBox(height: 16),
+              Text(
+                'Unresponsive or not breathing normally',
+                style: TextStyle(fontWeight: FontWeight.bold),
+              ),
+              Text(
+                'If trained, begin CPR and use an AED as soon as available. Continue until help takes over or the person responds.',
+              ),
+              SizedBox(height: 16),
+              Text(
+                'Severe bleeding',
+                style: TextStyle(fontWeight: FontWeight.bold),
+              ),
+              Text(
+                'Apply firm, continuous pressure with clean cloth or gauze. Do not remove an embedded object; press around it.',
+              ),
+              SizedBox(height: 16),
+              Text(
+                'Possible spinal injury',
+                style: TextStyle(fontWeight: FontWeight.bold),
+              ),
+              Text(
+                'Do not move the person unless there is immediate danger. Keep them still and warm while waiting for help.',
+              ),
+            ],
+          ),
+        ),
       ),
     );
   }
@@ -654,36 +867,7 @@ class _SOSScreenState extends State<SOSScreen> with TickerProviderStateMixin {
 
   // Layout 1: Personal Safety Intelligence Dashboard
   Widget _buildInactiveLayout() {
-    // Mock historical data — replace with Supabase query once backend is ready
-    final List<Map<String, dynamic>> _history = [
-      {
-        'type': 'Police / Threat',
-        'emoji': '👮',
-        'date': '2 days ago',
-        'status': 'Resolved',
-        'statusColor': AppTheme.successColor,
-        'responseTime': '4.2 mins',
-        'location': 'East Legon, Accra',
-      },
-      {
-        'type': 'Medical Aid',
-        'emoji': '🚑',
-        'date': '11 days ago',
-        'status': 'False Alarm',
-        'statusColor': AppTheme.warningColor,
-        'responseTime': '—',
-        'location': 'Cantonments, Accra',
-      },
-      {
-        'type': 'Fire Rescue',
-        'emoji': '🔥',
-        'date': '23 days ago',
-        'status': 'Resolved',
-        'statusColor': AppTheme.successColor,
-        'responseTime': '7.1 mins',
-        'location': 'Tema, Greater Accra',
-      },
-    ];
+    final List<Map<String, dynamic>> _history = [];
 
     return Scaffold(
       backgroundColor: AppTheme.backgroundColor,
@@ -1426,6 +1610,18 @@ class _SOSScreenState extends State<SOSScreen> with TickerProviderStateMixin {
                           child: isDialable && phoneMatch != null
                               ? GestureDetector(
                                   onTap: () async {
+                                    if (_demoMode) {
+                                      ScaffoldMessenger.of(
+                                        context,
+                                      ).showSnackBar(
+                                        const SnackBar(
+                                          content: Text(
+                                            'DEMO MODE: hotline dialing is disabled.',
+                                          ),
+                                        ),
+                                      );
+                                      return;
+                                    }
                                     final digits = step.replaceAll(
                                       RegExp(r'[^\d]'),
                                       '',
@@ -1530,7 +1726,7 @@ class _SOSScreenState extends State<SOSScreen> with TickerProviderStateMixin {
                   ),
                   const SizedBox(height: 16),
                   const Text(
-                    'SOS EMERGENCY INITIATED',
+                    'SOS SEND STATUS',
                     style: TextStyle(
                       color: Colors.white,
                       fontWeight: FontWeight.bold,
@@ -1539,8 +1735,10 @@ class _SOSScreenState extends State<SOSScreen> with TickerProviderStateMixin {
                     ),
                   ),
                   const SizedBox(height: 12),
-                  const Text(
-                    'Broadcasting live telemetry & initiating regional dispatch in:',
+                  Text(
+                    _activeIncidentId != null
+                        ? 'Your SOS is recorded by the server. Cancel within $_countdownSeconds seconds if this was a mistake.'
+                        : 'Sending your SOS now. The server has not confirmed receipt yet.',
                     textAlign: TextAlign.center,
                     style: TextStyle(
                       color: Colors.white70,
@@ -1558,7 +1756,7 @@ class _SOSScreenState extends State<SOSScreen> with TickerProviderStateMixin {
                         width: 180,
                         height: 180,
                         child: CircularProgressIndicator(
-                          value: _countdownSeconds / 10,
+                          value: _countdownSeconds / 7,
                           strokeWidth: 10,
                           backgroundColor: Colors.white10,
                           valueColor: const AlwaysStoppedAnimation<Color>(
@@ -1592,7 +1790,7 @@ class _SOSScreenState extends State<SOSScreen> with TickerProviderStateMixin {
                         ),
                       ),
                       child: const Text(
-                        'CANCEL DISPATCH',
+                        'CANCEL SOS',
                         style: TextStyle(
                           fontWeight: FontWeight.bold,
                           fontSize: 16,
@@ -1790,12 +1988,7 @@ class _SOSScreenState extends State<SOSScreen> with TickerProviderStateMixin {
     return AnimatedBuilder(
       animation: _flashColorAnimation,
       builder: (context, child) {
-        final bool showMap =
-            _isDispatched &&
-            _latitude != null &&
-            _longitude != null &&
-            _responderLat != null &&
-            _responderLng != null;
+        final bool showMap = _latitude != null && _longitude != null;
 
         return AnnotatedRegion<SystemUiOverlayStyle>(
           value: SystemUiOverlayStyle.light,
@@ -1920,40 +2113,14 @@ class _SOSScreenState extends State<SOSScreen> with TickerProviderStateMixin {
                           }
                         ]
                       ''');
-                        Future.delayed(
-                          const Duration(milliseconds: 500),
-                          _updateMapBounds,
-                        );
                       },
                       markers: {
-                        if (_isRedDotVisible)
-                          Marker(
-                            markerId: const MarkerId('user_location'),
-                            position: LatLng(_latitude!, _longitude!),
-                            icon: BitmapDescriptor.defaultMarkerWithHue(
-                              BitmapDescriptor.hueRed,
-                            ),
-                          ),
                         Marker(
-                          markerId: const MarkerId('responder_location'),
-                          position: LatLng(_responderLat!, _responderLng!),
-                          icon:
-                              _responderIcon ??
-                              BitmapDescriptor.defaultMarkerWithHue(
-                                BitmapDescriptor.hueBlue,
-                              ),
-                          infoWindow: InfoWindow(title: _responderName),
-                        ),
-                      },
-                      polylines: {
-                        Polyline(
-                          polylineId: const PolylineId('route'),
-                          points: [
-                            LatLng(_latitude!, _longitude!),
-                            LatLng(_responderLat!, _responderLng!),
-                          ],
-                          color: AppTheme.primaryColor,
-                          width: 5,
+                          markerId: const MarkerId('user_location'),
+                          position: LatLng(_latitude!, _longitude!),
+                          icon: BitmapDescriptor.defaultMarkerWithHue(
+                            BitmapDescriptor.hueRed,
+                          ),
                         ),
                       },
                       myLocationEnabled: false,
@@ -2003,22 +2170,28 @@ class _SOSScreenState extends State<SOSScreen> with TickerProviderStateMixin {
                           ],
                         ),
                         const SizedBox(height: 32),
-                        const Text(
-                          'HELP IS ON THE WAY',
-                          style: TextStyle(
-                            color: Colors.white,
-                            fontWeight: FontWeight.bold,
-                            fontSize: 24,
-                            letterSpacing: 1,
+                        Padding(
+                          padding: const EdgeInsets.symmetric(horizontal: 20),
+                          child: Text(
+                            _statusText.toUpperCase(),
+                            textAlign: TextAlign.center,
+                            softWrap: true,
+                            style: const TextStyle(
+                              color: Colors.white,
+                              fontWeight: FontWeight.bold,
+                              fontSize: 20,
+                              letterSpacing: 1,
+                              shadows: [
+                                Shadow(color: Colors.black87, blurRadius: 8),
+                              ],
+                            ),
                           ),
                         ),
                         const SizedBox(height: 8),
                         Padding(
                           padding: const EdgeInsets.symmetric(horizontal: 24.0),
                           child: Text(
-                            _activeIncidentId != null
-                                ? 'Location: $_address\nCoordinates and live telemetry are transmitting to Control Room.'
-                                : 'GPS: ${_latitude?.toStringAsFixed(5) ?? '--'}, ${_longitude?.toStringAsFixed(5) ?? '--'}\nRead coordinates to operator if calling 112.',
+                            '${_activeIncidentId == null ? _address : 'Location: $_address'}${_operatorName == null ? '' : '\nOperator: $_operatorName'}',
                             textAlign: TextAlign.center,
                             style: const TextStyle(
                               color: Colors.white70,
@@ -2074,6 +2247,8 @@ class _SOSScreenState extends State<SOSScreen> with TickerProviderStateMixin {
                                 Icon(
                                   _activeIncidentId != null
                                       ? LucideIcons.radio
+                                      : _smsDraftReady
+                                      ? LucideIcons.messageSquare
                                       : LucideIcons.wifiOff,
                                   color: Colors.white,
                                   size: 14,
@@ -2081,8 +2256,10 @@ class _SOSScreenState extends State<SOSScreen> with TickerProviderStateMixin {
                                 const SizedBox(width: 6),
                                 Text(
                                   _activeIncidentId != null
-                                      ? 'BROADCASTING'
-                                      : 'SMS FALLBACK',
+                                      ? 'SERVER RECORDED'
+                                      : _smsDraftReady
+                                      ? 'SMS PREVIEW ONLY'
+                                      : 'NOT CONFIRMED',
                                   style: const TextStyle(
                                     color: Colors.white,
                                     fontWeight: FontWeight.bold,
@@ -2130,7 +2307,7 @@ class _SOSScreenState extends State<SOSScreen> with TickerProviderStateMixin {
                     child: Column(
                       mainAxisSize: MainAxisSize.min,
                       children: [
-                        // Simulated Live Response Dispatch Card or Offline Notice
+                        // Display only state returned by the backend.
                         if (_activeIncidentId != null)
                           Container(
                             padding: const EdgeInsets.all(20),
@@ -2165,8 +2342,8 @@ class _SOSScreenState extends State<SOSScreen> with TickerProviderStateMixin {
                                         crossAxisAlignment:
                                             CrossAxisAlignment.start,
                                         children: [
-                                          const Text(
-                                            'Dispatch Unit Dispatched',
+                                          Text(
+                                            _statusText,
                                             style: TextStyle(
                                               fontWeight: FontWeight.bold,
                                               color: AppTheme.textPrimary,
@@ -2174,34 +2351,226 @@ class _SOSScreenState extends State<SOSScreen> with TickerProviderStateMixin {
                                           ),
                                           const SizedBox(height: 2),
                                           Text(
-                                            '$_responderName is en-route',
+                                            _dispatchUnit == null
+                                                ? 'Location: $_address'
+                                                : '$_dispatchUnit${_etaMinutes == null ? '' : ' · ETA $_etaMinutes min'}',
                                             style: const TextStyle(
                                               fontSize: 12,
                                               color: AppTheme.textSecondary,
                                             ),
                                           ),
+                                          if (_statusUnavailable)
+                                            const Text(
+                                              'Connection lost · showing last server-recorded state',
+                                              style: TextStyle(
+                                                color: AppTheme.warningColor,
+                                                fontSize: 12,
+                                              ),
+                                            ),
+                                          if (_localRecoveryUnavailable)
+                                            const Text(
+                                              'This device could not save a recovery key; keep the app open until the server confirms status.',
+                                              style: TextStyle(
+                                                color: AppTheme.warningColor,
+                                                fontSize: 12,
+                                              ),
+                                            ),
+                                          if (_messagesUnavailable)
+                                            const Text(
+                                              'Control room chat unavailable · delivery is not confirmed',
+                                              style: TextStyle(
+                                                color: AppTheme.warningColor,
+                                                fontSize: 12,
+                                              ),
+                                            ),
+                                          if (_activeIncidentId != null) ...[
+                                            const Divider(height: 24),
+                                            const Align(
+                                              alignment: Alignment.centerLeft,
+                                              child: Text(
+                                                'INCIDENT CHAT · TEST',
+                                                style: TextStyle(
+                                                  fontWeight: FontWeight.bold,
+                                                  fontSize: 11,
+                                                  color: AppTheme.textSecondary,
+                                                ),
+                                              ),
+                                            ),
+                                            if (_messages.isEmpty)
+                                              const Padding(
+                                                padding: EdgeInsets.symmetric(
+                                                  vertical: 8,
+                                                ),
+                                                child: Align(
+                                                  alignment:
+                                                      Alignment.centerLeft,
+                                                  child: Text(
+                                                    'No messages yet. Send a message to the control room.',
+                                                    style: TextStyle(
+                                                      fontSize: 12,
+                                                      color: AppTheme
+                                                          .textSecondary,
+                                                    ),
+                                                  ),
+                                                ),
+                                              ),
+                                            if (_messages.isNotEmpty)
+                                              SizedBox(
+                                                height: min(
+                                                  170.0,
+                                                  62.0 * _messages.length,
+                                                ),
+                                                child: ListView.builder(
+                                                  itemCount: _messages.length,
+                                                  itemBuilder: (context, index) {
+                                                    final message =
+                                                        _messages[index];
+                                                    final isCitizen =
+                                                        message['sender_role'] ==
+                                                        'citizen';
+                                                    return Align(
+                                                      alignment: isCitizen
+                                                          ? Alignment
+                                                                .centerRight
+                                                          : Alignment
+                                                                .centerLeft,
+                                                      child: Container(
+                                                        constraints:
+                                                            const BoxConstraints(
+                                                              maxWidth: 300,
+                                                            ),
+                                                        margin:
+                                                            const EdgeInsets.symmetric(
+                                                              vertical: 4,
+                                                            ),
+                                                        padding:
+                                                            const EdgeInsets.symmetric(
+                                                              horizontal: 12,
+                                                              vertical: 8,
+                                                            ),
+                                                        decoration: BoxDecoration(
+                                                          color: isCitizen
+                                                              ? AppTheme
+                                                                    .primaryColor
+                                                              : const Color(
+                                                                  0xFFE2E8F0,
+                                                                ),
+                                                          borderRadius:
+                                                              BorderRadius.circular(
+                                                                12,
+                                                              ),
+                                                        ),
+                                                        child: Column(
+                                                          crossAxisAlignment:
+                                                              CrossAxisAlignment
+                                                                  .start,
+                                                          children: [
+                                                            Text(
+                                                              message['content']
+                                                                      ?.toString() ??
+                                                                  '',
+                                                              style: TextStyle(
+                                                                color: isCitizen
+                                                                    ? Colors
+                                                                          .white
+                                                                    : AppTheme
+                                                                          .textPrimary,
+                                                              ),
+                                                            ),
+                                                            const SizedBox(
+                                                              height: 3,
+                                                            ),
+                                                            Text(
+                                                              '${message['sender'] ?? (isCitizen ? 'You' : 'Control room')} · ${_messageDeliveryLabel(message['delivery_state'] ?? message['status'], readState: message['read_state'])}',
+                                                              style: TextStyle(
+                                                                fontSize: 10,
+                                                                color: isCitizen
+                                                                    ? Colors
+                                                                          .white70
+                                                                    : AppTheme
+                                                                          .textSecondary,
+                                                              ),
+                                                            ),
+                                                          ],
+                                                        ),
+                                                      ),
+                                                    );
+                                                  },
+                                                ),
+                                              ),
+                                            Row(
+                                              crossAxisAlignment:
+                                                  CrossAxisAlignment.start,
+                                              children: [
+                                                Expanded(
+                                                  child: TextField(
+                                                    controller:
+                                                        _messageController,
+                                                    enabled: !_messageSending,
+                                                    maxLength: 2000,
+                                                    minLines: 1,
+                                                    maxLines: 3,
+                                                    onChanged: (_) {
+                                                      setState(() {});
+                                                    },
+                                                    style: const TextStyle(
+                                                      fontSize: 16,
+                                                      color:
+                                                          AppTheme.textPrimary,
+                                                    ),
+                                                    textInputAction:
+                                                        TextInputAction.send,
+                                                    onSubmitted: (_) =>
+                                                        _sendCitizenMessage(),
+                                                    decoration: const InputDecoration(
+                                                      counterText: '',
+                                                      hintText:
+                                                          'Message the control room',
+                                                      isDense: true,
+                                                      border:
+                                                          OutlineInputBorder(),
+                                                    ),
+                                                  ),
+                                                ),
+                                                const SizedBox(width: 8),
+                                                IconButton(
+                                                  tooltip: 'Send TEST message',
+                                                  onPressed:
+                                                      _messageSending ||
+                                                          _messageController
+                                                              .text
+                                                              .trim()
+                                                              .isEmpty
+                                                      ? null
+                                                      : _sendCitizenMessage,
+                                                  icon: _messageSending
+                                                      ? const SizedBox(
+                                                          width: 18,
+                                                          height: 18,
+                                                          child:
+                                                              CircularProgressIndicator(
+                                                                strokeWidth: 2,
+                                                              ),
+                                                        )
+                                                      : const Icon(
+                                                          LucideIcons.send,
+                                                        ),
+                                                ),
+                                              ],
+                                            ),
+                                            if (_messageSendError != null)
+                                              Align(
+                                                alignment: Alignment.centerLeft,
+                                                child: Text(
+                                                  _messageSendError!,
+                                                  style: const TextStyle(
+                                                    color: AppTheme.errorColor,
+                                                    fontSize: 12,
+                                                  ),
+                                                ),
+                                              ),
+                                          ],
                                         ],
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                                const Divider(height: 24),
-                                Row(
-                                  mainAxisAlignment:
-                                      MainAxisAlignment.spaceBetween,
-                                  children: [
-                                    const Text(
-                                      'Estimated Arrival Time',
-                                      style: TextStyle(
-                                        color: AppTheme.textSecondary,
-                                      ),
-                                    ),
-                                    Text(
-                                      _responderETA,
-                                      style: const TextStyle(
-                                        fontWeight: FontWeight.bold,
-                                        color: AppTheme.errorColor,
-                                        fontSize: 16,
                                       ),
                                     ),
                                   ],
@@ -2227,19 +2596,23 @@ class _SOSScreenState extends State<SOSScreen> with TickerProviderStateMixin {
                                             .withOpacity(0.1),
                                         shape: BoxShape.circle,
                                       ),
-                                      child: const Icon(
-                                        LucideIcons.wifiOff,
+                                      child: Icon(
+                                        _smsDraftReady
+                                            ? LucideIcons.messageSquare
+                                            : LucideIcons.wifiOff,
                                         color: AppTheme.warningColor,
                                       ),
                                     ),
                                     const SizedBox(width: 12),
-                                    const Expanded(
+                                    Expanded(
                                       child: Column(
                                         crossAxisAlignment:
                                             CrossAxisAlignment.start,
                                         children: [
                                           Text(
-                                            'Offline — SMS Fallback Active',
+                                            _smsDraftReady
+                                                ? 'SMS preview — not sent'
+                                                : 'No delivery confirmed',
                                             style: TextStyle(
                                               fontWeight: FontWeight.bold,
                                               color: AppTheme.textPrimary,
@@ -2247,7 +2620,9 @@ class _SOSScreenState extends State<SOSScreen> with TickerProviderStateMixin {
                                           ),
                                           SizedBox(height: 2),
                                           Text(
-                                            'Read coordinates to 112 operator:',
+                                            _smsDraftReady
+                                                ? 'No test control-room recipient is configured. Nothing was sent.'
+                                                : 'Retry the internet connection or configure an approved test SMS gateway.',
                                             style: TextStyle(
                                               fontSize: 12,
                                               color: AppTheme.textSecondary,
@@ -2310,78 +2685,75 @@ class _SOSScreenState extends State<SOSScreen> with TickerProviderStateMixin {
                         const SizedBox(height: 24),
 
                         // Quick Action buttons inside SOS Active State
-                        Row(
+                        Column(
+                          crossAxisAlignment: CrossAxisAlignment.stretch,
                           children: [
-                            Expanded(
-                              child: OutlinedButton.icon(
-                                onPressed: () async {
-                                  HapticFeedback.vibrate();
-                                  final Uri telUri = Uri.parse('tel:112');
-                                  if (await canLaunchUrl(telUri)) {
-                                    await launchUrl(telUri);
-                                  } else {
-                                    ScaffoldMessenger.of(context).showSnackBar(
-                                      const SnackBar(
-                                        content: Text(
-                                          'Could not launch phone dialer',
-                                        ),
-                                      ),
-                                    );
-                                  }
-                                },
-                                icon: Icon(
-                                  LucideIcons.phone,
-                                  color: showMap
-                                      ? AppTheme.primaryColor
-                                      : Colors.white,
+                            ElevatedButton.icon(
+                              onPressed: _callControl,
+                              icon: Icon(LucideIcons.phone),
+                              label: const Text('CALL CONTROL'),
+                              style: ElevatedButton.styleFrom(
+                                backgroundColor: AppTheme.primaryColor,
+                                foregroundColor: Colors.white,
+                                padding: const EdgeInsets.symmetric(
+                                  vertical: 18,
                                 ),
-                                label: Text(
-                                  'CALL CONTROL',
-                                  style: TextStyle(
-                                    color: showMap
-                                        ? AppTheme.primaryColor
-                                        : Colors.white,
-                                  ),
-                                ),
-                                style: OutlinedButton.styleFrom(
-                                  padding: const EdgeInsets.symmetric(
-                                    vertical: 16,
-                                  ),
-                                  side: BorderSide(
-                                    color: showMap
-                                        ? AppTheme.primaryColor
-                                        : Colors.white,
-                                    width: 1.5,
-                                  ),
-                                  shape: RoundedRectangleBorder(
-                                    borderRadius: BorderRadius.circular(12),
-                                  ),
+                                shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(12),
                                 ),
                               ),
                             ),
-                            const SizedBox(width: 16),
-                            Expanded(
-                              child: ElevatedButton.icon(
-                                onPressed: _stopSOS,
-                                icon: const Icon(LucideIcons.square),
-                                label: const Text('STOP SOS'),
-                                style: ElevatedButton.styleFrom(
-                                  backgroundColor: showMap
-                                      ? AppTheme.errorColor
-                                      : Colors.white,
-                                  foregroundColor: showMap
-                                      ? Colors.white
-                                      : AppTheme.errorColor,
-                                  padding: const EdgeInsets.symmetric(
-                                    vertical: 16,
-                                  ),
-                                  shape: RoundedRectangleBorder(
-                                    borderRadius: BorderRadius.circular(12),
-                                  ),
-                                  elevation: showMap ? 4 : 0,
+                            const SizedBox(height: 10),
+                            OutlinedButton.icon(
+                              onPressed: _stopSOS,
+                              icon: const Icon(LucideIcons.shieldCheck),
+                              label: const Text('I AM SAFE'),
+                              style: OutlinedButton.styleFrom(
+                                foregroundColor: Colors.white,
+                                side: const BorderSide(color: Colors.white54),
+                                padding: const EdgeInsets.symmetric(
+                                  vertical: 16,
+                                ),
+                                shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(12),
                                 ),
                               ),
                             ),
+                            if (_activeIncidentId == null) ...[
+                              const SizedBox(height: 8),
+                              OutlinedButton.icon(
+                                onPressed: _submissionInProgress
+                                    ? null
+                                    : _submitSos,
+                                icon: const Icon(LucideIcons.refreshCw),
+                                label: const Text('RETRY INTERNET CONNECTION'),
+                              ),
+                              if (_smsPreview != null)
+                                Container(
+                                  margin: const EdgeInsets.only(top: 8),
+                                  padding: const EdgeInsets.all(12),
+                                  decoration: BoxDecoration(
+                                    color: const Color(0xFFFFFBEB),
+                                    borderRadius: BorderRadius.circular(10),
+                                  ),
+                                  child: SelectableText(
+                                    _smsPreview!,
+                                    style: const TextStyle(
+                                      color: AppTheme.textPrimary,
+                                      fontSize: 12,
+                                    ),
+                                  ),
+                                ),
+                            ],
+                            if (_activeIncidentId != null)
+                              TextButton.icon(
+                                onPressed: _showFirstAid,
+                                icon: const Icon(LucideIcons.heartPulse),
+                                label: const Text('FIRST AID INSTRUCTIONS'),
+                                style: TextButton.styleFrom(
+                                  foregroundColor: Colors.white,
+                                ),
+                              ),
                           ],
                         ),
                       ],
@@ -2397,6 +2769,21 @@ class _SOSScreenState extends State<SOSScreen> with TickerProviderStateMixin {
   }
 
   Widget _buildRecoveryLayout() {
+    final caseClosed = _incidentStatus == 'resolved';
+    final wasRetracted = _incidentStatus == 'retracted';
+    final resolvedTime = _resolvedAt == null
+        ? ''
+        : ' at ${_resolvedAt!.toLocal()}';
+    final recoveryTitle = caseClosed
+        ? 'CASE CLOSED'
+        : wasRetracted
+        ? 'SOS RETRACTED'
+        : 'YOU ARE SAFE';
+    final recoveryMessage = caseClosed
+        ? 'Case closed by ${_operatorName ?? 'operator'}$resolvedTime.${_resolvedOutcome == null || _resolvedOutcome!.isEmpty ? '' : ' Outcome: $_resolvedOutcome'}'
+        : wasRetracted
+        ? 'The server recorded your SOS retraction. No response status is implied.'
+        : 'Waiting for the operator to close your case.';
     return Scaffold(
       backgroundColor: const Color(0xFFF0FDF4), // Light soft green background
       body: SafeArea(
@@ -2419,8 +2806,8 @@ class _SOSScreenState extends State<SOSScreen> with TickerProviderStateMixin {
                 ),
               ),
               const SizedBox(height: 24),
-              const Text(
-                'YOU ARE SAFE',
+              Text(
+                recoveryTitle,
                 style: TextStyle(
                   color: Color(0xFF166534),
                   fontWeight: FontWeight.bold,
@@ -2429,8 +2816,8 @@ class _SOSScreenState extends State<SOSScreen> with TickerProviderStateMixin {
                 ),
               ),
               const SizedBox(height: 12),
-              const Text(
-                'Emergency state resolved. Live coordinate broadcasting and background sensor sync have been completely deactivated.',
+              Text(
+                recoveryMessage,
                 textAlign: TextAlign.center,
                 style: TextStyle(
                   color: Color(0xFF15803D),
@@ -2457,18 +2844,24 @@ class _SOSScreenState extends State<SOSScreen> with TickerProviderStateMixin {
                 child: Column(
                   children: [
                     _buildRecoveryRow(
-                      LucideIcons.checkCircle2,
-                      'GPS Broadcast Terminated',
+                      LucideIcons.mapPin,
+                      'Location updates stopped on this device',
                     ),
                     const Divider(height: 24),
                     _buildRecoveryRow(
-                      LucideIcons.checkCircle2,
-                      'Guardians Notified (I\'m Safe)',
+                      _citizenReportedSafe
+                          ? LucideIcons.checkCircle2
+                          : LucideIcons.circle,
+                      _citizenReportedSafe
+                          ? 'Safe status sent to the control room'
+                          : 'No contact notification was sent',
                     ),
                     const Divider(height: 24),
                     _buildRecoveryRow(
-                      LucideIcons.checkCircle2,
-                      'National Control Room Closed File',
+                      caseClosed ? LucideIcons.checkCircle2 : LucideIcons.clock,
+                      caseClosed
+                          ? 'Case closed by operator'
+                          : 'Waiting for operator closure',
                     ),
                   ],
                 ),
@@ -2514,12 +2907,14 @@ class _SOSScreenState extends State<SOSScreen> with TickerProviderStateMixin {
       children: [
         Icon(icon, color: AppTheme.successColor, size: 20),
         const SizedBox(width: 12),
-        Text(
-          text,
-          style: const TextStyle(
-            fontWeight: FontWeight.bold,
-            color: AppTheme.textPrimary,
-            fontSize: 14,
+        Expanded(
+          child: Text(
+            text,
+            style: const TextStyle(
+              fontWeight: FontWeight.bold,
+              color: AppTheme.textPrimary,
+              fontSize: 14,
+            ),
           ),
         ),
       ],

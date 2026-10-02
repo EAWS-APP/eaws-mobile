@@ -1,12 +1,11 @@
-import 'dart:async';
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:lucide_icons/lucide_icons.dart';
 import 'package:image_picker/image_picker.dart';
-import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../core/theme.dart';
 import '../../core/api_client.dart';
+import '../../core/insforge_client.dart';
 
 class MediaUploadsScreen extends StatefulWidget {
   const MediaUploadsScreen({super.key});
@@ -16,41 +15,7 @@ class MediaUploadsScreen extends StatefulWidget {
 }
 
 class _MediaUploadsScreenState extends State<MediaUploadsScreen> {
-  // Settings switches
-  bool _autoUploadSOS = true;
-  bool _uploadWiFiOnly = false;
-  bool _compressBeforeUpload = true;
-
-  // Upload Progress Items simulation state
-  double _img1UploadProgress = 0.62;
-  bool _img1Completed = false;
-
   final List<Map<String, dynamic>> _uploadQueue = [];
-
-  @override
-  void initState() {
-    super.initState();
-    // Simulate active upload progress for visual high premium feel
-    _startSimulatedUploads();
-  }
-
-  void _startSimulatedUploads() {
-    Future.delayed(const Duration(seconds: 2), () {
-      if (mounted) {
-        setState(() {
-          _img1UploadProgress = 0.85;
-        });
-      }
-      Future.delayed(const Duration(seconds: 2), () {
-        if (mounted) {
-          setState(() {
-            _img1UploadProgress = 1.0;
-            _img1Completed = true;
-          });
-        }
-      });
-    });
-  }
 
   Future<void> _captureAndUploadImage() async {
     try {
@@ -59,92 +24,100 @@ class _MediaUploadsScreenState extends State<MediaUploadsScreen> {
       if (image == null) return;
 
       final file = File(image.path);
-      final String filename = 'IMG_${DateTime.now().millisecondsSinceEpoch}.jpg';
-      final String fileSize = '${(file.lengthSync() / (1024 * 1024)).toStringAsFixed(1)} MB';
+      final String filename =
+          'IMG_${DateTime.now().millisecondsSinceEpoch}.jpg';
+      final String fileSize =
+          '${(file.lengthSync() / (1024 * 1024)).toStringAsFixed(1)} MB';
 
       final newItem = {
         'name': filename,
         'size': fileSize,
-        'progress': 0.1,
+        'progress': 0.0,
         'status': 'Uploading',
-        'thumbUrl': 'https://images.unsplash.com/photo-1547683905-f686c993aae5?auto=format&fit=crop&q=80&w=150',
+        'file': file,
       };
 
       setState(() {
         _uploadQueue.insert(0, newItem);
       });
 
-      try {
-        final supabase = Supabase.instance.client;
-        
-        // Upload image to Supabase storage bucket 'sos_evidence'
-        await supabase.storage.from('sos_evidence').upload(
-          filename,
-          file,
-          fileOptions: const FileOptions(cacheControl: '3600', upsert: true),
-        );
-        
-        final String publicUrl = supabase.storage.from('sos_evidence').getPublicUrl(filename);
-        
-        setState(() {
-          newItem['progress'] = 1.0;
-          newItem['status'] = 'Completed';
-          newItem['thumbUrl'] = publicUrl;
-        });
-
-        // Sync media to Express backend
-        final reportsData = await EawsApiClient.instance.get('/incidents/my-reports');
-        final List reports = reportsData['incidents'] ?? [];
-        if (reports.isNotEmpty) {
-          final latestIncidentId = reports.first['id'];
-          await EawsApiClient.instance.post('/incidents/$latestIncidentId/media', body: {
-            'media_type': 'image',
-            'storage_bucket': 'sos_evidence',
-            'storage_path': filename,
-            'file_url': publicUrl,
-            'mime_type': 'image/jpeg',
-            'file_size_bytes': file.lengthSync(),
-          });
-        }
-      } catch (uploadErr) {
-        print('Supabase direct upload failed, running high fidelity simulation fallback: $uploadErr');
-        _simulateUpload(newItem);
-      }
+      await _uploadEvidence(file, newItem);
     } catch (e) {
-      print('Capture and upload image failed: $e');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Could not capture image: $e'),
+            backgroundColor: AppTheme.errorColor,
+          ),
+        );
+      }
     }
   }
 
-  void _simulateVideoSelection() {
-    final newItem = {
-      'name': 'VID_00${DateTime.now().millisecondsSinceEpoch.toString().substring(10)}.mp4',
-      'size': '12.4 MB',
-      'progress': 0.1,
-      'status': 'Uploading',
-      'thumbUrl': 'https://images.unsplash.com/photo-1508873699372-7aeab60b44ab?auto=format&fit=crop&q=80&w=150',
-    };
-    setState(() {
-      _uploadQueue.insert(0, newItem);
-    });
-    _simulateUpload(newItem);
-  }
-
-  void _simulateUpload(Map<String, dynamic> item) {
-    Timer.periodic(const Duration(milliseconds: 600), (timer) {
-      if (!mounted) {
-        timer.cancel();
-        return;
-      }
+  Future<void> _uploadEvidence(File file, Map<String, dynamic> item) async {
+    if (mounted) {
       setState(() {
-        if (item['progress'] < 0.9) {
-          item['progress'] += 0.15;
-        } else {
+        item['status'] = 'Uploading';
+        item['progress'] = 0.0;
+      });
+    }
+    try {
+      final reportsData = await EawsApiClient.instance.get(
+        '/incidents/my-reports',
+      );
+      final reports = reportsData is Map ? reportsData['incidents'] : null;
+      if (reports is! List || reports.isEmpty || reports.first is! Map) {
+        throw StateError('Create an incident before attaching evidence.');
+      }
+      final incidentId = (reports.first as Map)['id']?.toString();
+      if (incidentId == null || incidentId.isEmpty) {
+        throw const FormatException(
+          'The latest incident did not include an ID.',
+        );
+      }
+      final filename = item['name'] as String;
+      final upload = await InsForgeClient.instance.uploadFile(
+        bucket: 'sos_evidence',
+        file: file,
+        filename: filename,
+        contentType: 'image/jpeg',
+      );
+      final storagePath = upload['key']?.toString() ?? filename;
+      await EawsApiClient.instance.post(
+        '/incidents/${Uri.encodeComponent(incidentId)}/media',
+        body: {
+          'media_type': 'image',
+          'storage_bucket': 'sos_evidence',
+          'storage_path': storagePath,
+          'mime_type': 'image/jpeg',
+          'file_size_bytes': await file.length(),
+        },
+      );
+      if (mounted) {
+        setState(() {
           item['progress'] = 1.0;
           item['status'] = 'Completed';
-          timer.cancel();
-        }
-      });
-    });
+        });
+      }
+    } catch (error) {
+      if (mounted) {
+        setState(() => item['status'] = 'Failed');
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Evidence upload failed: $error'),
+            backgroundColor: AppTheme.errorColor,
+          ),
+        );
+      }
+    }
+  }
+
+  void _showVideoUnavailable() {
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text('Video evidence upload is not available yet.'),
+      ),
+    );
   }
 
   @override
@@ -223,7 +196,7 @@ class _MediaUploadsScreenState extends State<MediaUploadsScreen> {
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         Text(
-                          'Auto-Upload Active',
+                          'Evidence uploads',
                           style: TextStyle(
                             color: Color(0xFF991B1B),
                             fontWeight: FontWeight.bold,
@@ -232,7 +205,7 @@ class _MediaUploadsScreenState extends State<MediaUploadsScreen> {
                         ),
                         const SizedBox(height: 4),
                         Text(
-                          'Photos and videos captured during an SOS event are automatically uploaded to emergency responders.',
+                          'Captured photos upload to configured storage and are attached to your latest incident. Delivery to responders is not verified.',
                           style: TextStyle(
                             color: Color(0xFFB91C1C),
                             fontSize: 13,
@@ -295,19 +268,12 @@ class _MediaUploadsScreenState extends State<MediaUploadsScreen> {
                     letterSpacing: 1.2,
                   ),
                 ),
-                Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                  decoration: BoxDecoration(
-                    color: const Color(0xFFFEE2E2),
-                    borderRadius: BorderRadius.circular(10),
-                  ),
-                  child: Text(
-                    '${_uploadQueue.length + 3} items',
-                    style: const TextStyle(
-                      color: AppTheme.primaryColor,
-                      fontSize: 10,
-                      fontWeight: FontWeight.bold,
-                    ),
+                Text(
+                  '${_uploadQueue.length} items',
+                  style: const TextStyle(
+                    color: AppTheme.textSecondary,
+                    fontSize: 12,
+                    fontWeight: FontWeight.bold,
                   ),
                 ),
               ],
@@ -323,43 +289,26 @@ class _MediaUploadsScreenState extends State<MediaUploadsScreen> {
                       item['size'] as String,
                       item['progress'] as double,
                       item['status'] as String,
-                      item['thumbUrl'] as String? ?? 'https://images.unsplash.com/photo-1547683905-f686c993aae5?auto=format&fit=crop&q=80&w=150',
+                      onRetry: () =>
+                          _uploadEvidence(item['file'] as File, item),
                     ),
                   );
                 }),
-                // Item 1: Uploading State matching Screenshot 3
-                _buildUploadQueueItem(
-                  'IMG_2034.jpg',
-                  '2.4 MB',
-                  _img1Completed ? 1.0 : _img1UploadProgress,
-                  _img1Completed ? 'Completed' : 'Uploading',
-                  'https://images.unsplash.com/photo-1547683905-f686c993aae5?auto=format&fit=crop&q=80&w=150',
-                ),
-                const SizedBox(height: 12),
-                // Item 2: Completed State matching Screenshot 3
-                _buildUploadQueueItem(
-                  'VID_0012.mp4',
-                  '18.2 MB',
-                  1.0,
-                  'Completed',
-                  'https://images.unsplash.com/photo-1508873699372-7aeab60b44ab?auto=format&fit=crop&q=80&w=150',
-                ),
-                const SizedBox(height: 12),
-                // Item 3: Failed State matching Screenshot 3
-                _buildUploadQueueItem(
-                  'IMG_2035.jpg',
-                  '3.1 MB',
-                  0.35,
-                  'Failed',
-                  'https://images.unsplash.com/photo-1546410531-bb4caa6b424d?auto=format&fit=crop&q=80&w=150',
-                ),
+                if (_uploadQueue.isEmpty)
+                  const Padding(
+                    padding: EdgeInsets.all(20),
+                    child: Text(
+                      'No evidence uploaded in this session.',
+                      style: TextStyle(color: AppTheme.textSecondary),
+                    ),
+                  ),
               ],
             ),
             const SizedBox(height: 28),
 
             // 4. SETTINGS SECTION
             const Text(
-              'SETTINGS',
+              'UPLOAD SETTINGS',
               style: TextStyle(
                 fontSize: 12,
                 fontWeight: FontWeight.bold,
@@ -368,86 +317,12 @@ class _MediaUploadsScreenState extends State<MediaUploadsScreen> {
               ),
             ),
             const SizedBox(height: 12),
-            Container(
-              decoration: BoxDecoration(
-                color: Colors.white,
-                borderRadius: BorderRadius.circular(16),
-                border: Border.all(color: const Color(0xFFE5E7EB), width: 1.5),
-              ),
-              child: Column(
-                children: [
-                  _buildSettingsSwitch(
-                    'Auto-Upload on SOS',
-                    'Send media immediately',
-                    LucideIcons.zap,
-                    _autoUploadSOS,
-                    (val) {
-                      setState(() {
-                        _autoUploadSOS = val;
-                      });
-                    },
-                  ),
-                  const Divider(height: 1),
-                  _buildSettingsSwitch(
-                    'Upload over Wi-Fi only',
-                    'Save mobile data',
-                    LucideIcons.wifi,
-                    _uploadWiFiOnly,
-                    (val) {
-                      setState(() {
-                        _uploadWiFiOnly = val;
-                      });
-                    },
-                  ),
-                  const Divider(height: 1),
-                  _buildSettingsSwitch(
-                    'Compress before upload',
-                    'Faster delivery',
-                    LucideIcons.fileText,
-                    _compressBeforeUpload,
-                    (val) {
-                      setState(() {
-                        _compressBeforeUpload = val;
-                      });
-                    },
-                  ),
-                ],
-              ),
-            ),
-            const SizedBox(height: 36),
-
-            // 5. Huge red Upload All Action Button
-            SizedBox(
-              width: double.infinity,
-              child: ElevatedButton.icon(
-                onPressed: () {
-                  HapticFeedback.mediumImpact();
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(
-                      content: Text('Uploading all remaining items in queue...'),
-                      backgroundColor: AppTheme.successColor,
-                    ),
-                  );
-                },
-                icon: const Icon(LucideIcons.uploadCloud),
-                label: const Text('Upload All'),
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: AppTheme.primaryColor,
-                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-                  padding: const EdgeInsets.symmetric(vertical: 18),
-                  elevation: 2,
-                ),
-              ),
-            ),
-            const SizedBox(height: 8),
-            const Center(
-              child: Text(
-                '23.7 MB total • 2 items remaining',
-                style: TextStyle(
-                  color: AppTheme.textSecondary,
-                  fontSize: 12,
-                  fontWeight: FontWeight.w600,
-                ),
+            const Text(
+              'Wi-Fi-only upload and compression are not implemented. Each captured photo is uploaded immediately.',
+              style: TextStyle(
+                color: AppTheme.textSecondary,
+                fontSize: 13,
+                height: 1.4,
               ),
             ),
             const SizedBox(height: 48),
@@ -457,7 +332,12 @@ class _MediaUploadsScreenState extends State<MediaUploadsScreen> {
     );
   }
 
-  Widget _buildCaptureCard(String label, String subtitle, IconData icon, Color color) {
+  Widget _buildCaptureCard(
+    String label,
+    String subtitle,
+    IconData icon,
+    Color color,
+  ) {
     return Container(
       decoration: BoxDecoration(
         color: Colors.white,
@@ -477,7 +357,7 @@ class _MediaUploadsScreenState extends State<MediaUploadsScreen> {
           if (label == 'Take Photo') {
             _captureAndUploadImage();
           } else {
-            _simulateVideoSelection();
+            _showVideoUnavailable();
           }
         },
         borderRadius: BorderRadius.circular(16),
@@ -518,7 +398,13 @@ class _MediaUploadsScreenState extends State<MediaUploadsScreen> {
     );
   }
 
-  Widget _buildUploadQueueItem(String filename, String size, double progress, String status, String thumbUrl) {
+  Widget _buildUploadQueueItem(
+    String filename,
+    String size,
+    double progress,
+    String status, {
+    required VoidCallback onRetry,
+  }) {
     Color statusBg = const Color(0xFFFFFBEB);
     Color statusText = const Color(0xFFD97706);
     if (status == 'Completed') {
@@ -538,16 +424,17 @@ class _MediaUploadsScreenState extends State<MediaUploadsScreen> {
       ),
       child: Row(
         children: [
-          // File Thumbnail
           Container(
             width: 50,
             height: 50,
             decoration: BoxDecoration(
               borderRadius: BorderRadius.circular(10),
-              image: DecorationImage(
-                image: NetworkImage(thumbUrl),
-                fit: BoxFit.cover,
-              ),
+              color: const Color(0xFFFEE2E2),
+            ),
+            child: const Icon(
+              LucideIcons.image,
+              color: AppTheme.primaryColor,
+              size: 22,
             ),
           ),
           const SizedBox(width: 14),
@@ -570,7 +457,10 @@ class _MediaUploadsScreenState extends State<MediaUploadsScreen> {
                     ),
                     // Status Badge
                     Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 8,
+                        vertical: 4,
+                      ),
                       decoration: BoxDecoration(
                         color: statusBg,
                         borderRadius: BorderRadius.circular(8),
@@ -589,7 +479,11 @@ class _MediaUploadsScreenState extends State<MediaUploadsScreen> {
                             ),
                             const SizedBox(width: 5),
                           ] else if (status == 'Completed') ...[
-                            const Icon(Icons.check, color: Color(0xFF059669), size: 12),
+                            const Icon(
+                              Icons.check,
+                              color: Color(0xFF059669),
+                              size: 12,
+                            ),
                             const SizedBox(width: 4),
                           ],
                           Text(
@@ -636,7 +530,11 @@ class _MediaUploadsScreenState extends State<MediaUploadsScreen> {
                     minHeight: 5,
                     backgroundColor: const Color(0xFFF3F4F6),
                     valueColor: AlwaysStoppedAnimation<Color>(
-                      status == 'Failed' ? Colors.red : (status == 'Completed' ? Colors.green : Colors.orange),
+                      status == 'Failed'
+                          ? Colors.red
+                          : (status == 'Completed'
+                                ? Colors.green
+                                : Colors.orange),
                     ),
                   ),
                 ),
@@ -649,15 +547,7 @@ class _MediaUploadsScreenState extends State<MediaUploadsScreen> {
                         minimumSize: const Size(0, 0),
                         tapTargetSize: MaterialTapTargetSize.shrinkWrap,
                       ),
-                      onPressed: () {
-                        HapticFeedback.lightImpact();
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          const SnackBar(
-                            content: Text('Retrying image upload...'),
-                            backgroundColor: AppTheme.primaryColor,
-                          ),
-                        );
-                      },
+                      onPressed: onRetry,
                       child: const Text(
                         'Retry',
                         style: TextStyle(
@@ -674,35 +564,6 @@ class _MediaUploadsScreenState extends State<MediaUploadsScreen> {
             ),
           ),
         ],
-      ),
-    );
-  }
-
-  Widget _buildSettingsSwitch(String title, String subtitle, IconData icon, bool value, ValueChanged<bool> onChanged) {
-    return ListTile(
-      leading: Container(
-        padding: const EdgeInsets.all(8),
-        decoration: BoxDecoration(
-          color: AppTheme.primaryColor.withOpacity(0.08),
-          shape: BoxShape.circle,
-        ),
-        child: Icon(icon, color: AppTheme.primaryColor, size: 18),
-      ),
-      title: Text(
-        title,
-        style: const TextStyle(fontWeight: FontWeight.bold, color: AppTheme.textPrimary, fontSize: 14.5),
-      ),
-      subtitle: Text(
-        subtitle,
-        style: const TextStyle(color: AppTheme.textSecondary, fontSize: 12),
-      ),
-      trailing: Switch.adaptive(
-        value: value,
-        activeColor: AppTheme.primaryColor,
-        onChanged: (val) {
-          HapticFeedback.selectionClick();
-          onChanged(val);
-        },
       ),
     );
   }

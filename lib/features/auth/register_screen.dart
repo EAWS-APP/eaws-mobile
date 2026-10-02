@@ -5,6 +5,7 @@ import 'package:image_picker/image_picker.dart';
 import '../../core/theme.dart';
 import '../../core/eaws_logo.dart';
 import 'auth_service.dart';
+import 'otp_verification_screen.dart';
 
 class RegisterScreen extends StatefulWidget {
   const RegisterScreen({super.key});
@@ -24,7 +25,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
   bool _obscurePassword = true;
   bool _obscureConfirmPassword = true;
   bool _agreedToTerms = false;
-  
+
   File? _ghanaCardImage;
   File? _selfieImage;
   final ImagePicker _picker = ImagePicker();
@@ -100,11 +101,12 @@ class _RegisterScreenState extends State<RegisterScreen> {
                         width: 28,
                         height: 18,
                         fit: BoxFit.cover,
-                        errorBuilder: (context, error, stackTrace) => const Icon(
-                          LucideIcons.flag,
-                          color: AppTheme.textSecondary,
-                          size: 20,
-                        ),
+                        errorBuilder: (context, error, stackTrace) =>
+                            const Icon(
+                              LucideIcons.flag,
+                              color: AppTheme.textSecondary,
+                              size: 20,
+                            ),
                       ),
                     ),
                     title: Text(
@@ -258,9 +260,8 @@ class _RegisterScreenState extends State<RegisterScreen> {
     showDialog(
       context: context,
       barrierDismissible: false,
-      builder: (context) => const Center(
-        child: CircularProgressIndicator(color: Colors.white),
-      ),
+      builder: (context) =>
+          const Center(child: CircularProgressIndicator(color: Colors.white)),
     );
 
     final bool success = await AuthService.instance.signUpWithEmail(
@@ -277,122 +278,35 @@ class _RegisterScreenState extends State<RegisterScreen> {
 
     if (success) {
       if (context.mounted) {
-        // Send OTP (simulated/real) to the provided phone number
-        await AuthService.instance.sendOTP('$_selectedCountryCode${_phoneController.text.trim()}');
-
-        // Show OTP Verification Dialog
-        final bool? otpVerified = await showDialog<bool>(
-          context: context,
-          barrierDismissible: false,
-          builder: (context) {
-            final otpController = TextEditingController();
-            bool isVerifying = false;
-
-            return StatefulBuilder(
-              builder: (context, setDialogState) {
-                return AlertDialog(
-                  title: const Text('Verify Phone Number'),
-                  content: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      const Text(
-                        'We sent a 6-digit code to your phone. Enter it below to complete registration.',
-                        style: TextStyle(fontSize: 14, color: AppTheme.textSecondary),
-                      ),
-                      const SizedBox(height: 16),
-                      TextField(
-                        controller: otpController,
-                        keyboardType: TextInputType.number,
-                        maxLength: 6,
-                        decoration: const InputDecoration(
-                          hintText: '123456',
-                          prefixIcon: Icon(LucideIcons.messageSquare, color: AppTheme.textSecondary),
-                        ),
-                      ),
-                    ],
-                  ),
-                  actions: [
-                    TextButton(
-                      onPressed: () => Navigator.pop(context, false), // Cancel
-                      child: const Text('Cancel', style: TextStyle(color: AppTheme.textSecondary)),
-                    ),
-                    ElevatedButton(
-                      onPressed: isVerifying
-                          ? null
-                          : () async {
-                              final code = otpController.text.trim();
-                              if (code.length != 6) {
-                                ScaffoldMessenger.of(context).showSnackBar(
-                                  const SnackBar(content: Text('Please enter a valid 6-digit code'), backgroundColor: AppTheme.errorColor),
-                                );
-                                return;
-                              }
-                              setDialogState(() => isVerifying = true);
-                              final valid = await AuthService.instance.verifyOTP(
-                                '$_selectedCountryCode${_phoneController.text.trim()}',
-                                code,
-                              );
-                              if (valid && context.mounted) {
-                                Navigator.pop(context, true);
-                              } else {
-                                setDialogState(() => isVerifying = false);
-                                if (context.mounted) {
-                                  ScaffoldMessenger.of(context).showSnackBar(
-                                    const SnackBar(content: Text('Invalid code. Try 123456.'), backgroundColor: AppTheme.errorColor),
-                                  );
-                                }
-                              }
-                            },
-                      child: isVerifying
-                          ? const SizedBox(height: 20, width: 20, child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2))
-                          : const Text('Verify'),
-                    ),
-                  ],
-                );
-              },
-            );
-          },
+        final sent = await AuthService.instance.sendEmailVerificationCode(
+          _emailController.text.trim(),
         );
-
-        if (otpVerified == true && context.mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-              content: Row(
-                children: [
-                  Icon(Icons.check_circle_outline, color: Colors.white, size: 20),
-                  SizedBox(width: 12),
-                  Expanded(
-                    child: Text(
-                      'Registration Successful! Welcome to EAWS!',
-                      style: TextStyle(fontWeight: FontWeight.w600, color: Colors.white),
-                    ),
-                  ),
-                ],
-              ),
-              backgroundColor: AppTheme.successColor,
-              duration: Duration(seconds: 3),
-            ),
+        if (!sent) {
+          _showError(
+            'Account created, but the email verification code could not be sent. Try signing in to request another code.',
           );
-          Navigator.pop(context); // smooth return back to Login Screen
-        } else {
-           // User cancelled OTP or failed, sign them out so they can try again or wait
-           await AuthService.instance.signOut();
-           if (context.mounted) {
-             _showError('Registration incomplete. Phone number was not verified.');
-           }
+          return;
         }
+        await Navigator.push(
+          context,
+          MaterialPageRoute(
+            builder: (_) => OTPVerificationScreen(
+              email: _emailController.text.trim(),
+              isRegistration: true,
+            ),
+          ),
+        );
       }
     } else {
-      _showError('Registration failed. Please check your credentials and try again.');
+      _showError(
+        'Registration failed. Please check your credentials and try again.',
+      );
     }
   }
 
   void _showError(String message) {
     ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(message),
-        backgroundColor: AppTheme.errorColor,
-      ),
+      SnackBar(content: Text(message), backgroundColor: AppTheme.errorColor),
     );
   }
 
@@ -512,14 +426,20 @@ class _RegisterScreenState extends State<RegisterScreen> {
                         // Full Name Input
                         const Text(
                           'Full Name',
-                          style: TextStyle(fontWeight: FontWeight.w600, fontSize: 14),
+                          style: TextStyle(
+                            fontWeight: FontWeight.w600,
+                            fontSize: 14,
+                          ),
                         ),
                         const SizedBox(height: 8),
                         TextField(
                           controller: _fullNameController,
                           decoration: const InputDecoration(
                             hintText: 'Full Name',
-                            prefixIcon: Icon(LucideIcons.user, color: AppTheme.textSecondary),
+                            prefixIcon: Icon(
+                              LucideIcons.user,
+                              color: AppTheme.textSecondary,
+                            ),
                           ),
                         ),
                         const SizedBox(height: 16),
@@ -527,7 +447,10 @@ class _RegisterScreenState extends State<RegisterScreen> {
                         // Email Address Input
                         const Text(
                           'Email Address',
-                          style: TextStyle(fontWeight: FontWeight.w600, fontSize: 14),
+                          style: TextStyle(
+                            fontWeight: FontWeight.w600,
+                            fontSize: 14,
+                          ),
                         ),
                         const SizedBox(height: 8),
                         TextField(
@@ -535,7 +458,10 @@ class _RegisterScreenState extends State<RegisterScreen> {
                           keyboardType: TextInputType.emailAddress,
                           decoration: const InputDecoration(
                             hintText: 'Email Address',
-                            prefixIcon: Icon(LucideIcons.mail, color: AppTheme.textSecondary),
+                            prefixIcon: Icon(
+                              LucideIcons.mail,
+                              color: AppTheme.textSecondary,
+                            ),
                           ),
                         ),
                         const SizedBox(height: 16),
@@ -543,7 +469,10 @@ class _RegisterScreenState extends State<RegisterScreen> {
                         // Phone Number Input Row
                         const Text(
                           'Phone Number',
-                          style: TextStyle(fontWeight: FontWeight.w600, fontSize: 14),
+                          style: TextStyle(
+                            fontWeight: FontWeight.w600,
+                            fontSize: 14,
+                          ),
                         ),
                         const SizedBox(height: 8),
                         Row(
@@ -553,10 +482,14 @@ class _RegisterScreenState extends State<RegisterScreen> {
                               onTap: _showCountryPicker,
                               child: Container(
                                 height: 56,
-                                padding: const EdgeInsets.symmetric(horizontal: 12),
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 12,
+                                ),
                                 decoration: BoxDecoration(
                                   color: Colors.white,
-                                  border: Border.all(color: const Color(0xFFE5E7EB)),
+                                  border: Border.all(
+                                    color: const Color(0xFFE5E7EB),
+                                  ),
                                   borderRadius: BorderRadius.circular(8),
                                 ),
                                 child: Row(
@@ -568,11 +501,13 @@ class _RegisterScreenState extends State<RegisterScreen> {
                                         width: 26,
                                         height: 17,
                                         fit: BoxFit.cover,
-                                        errorBuilder: (context, error, stackTrace) => const Icon(
-                                          LucideIcons.flag,
-                                          color: AppTheme.textSecondary,
-                                          size: 16,
-                                        ),
+                                        errorBuilder:
+                                            (context, error, stackTrace) =>
+                                                const Icon(
+                                                  LucideIcons.flag,
+                                                  color: AppTheme.textSecondary,
+                                                  size: 16,
+                                                ),
                                       ),
                                     ),
                                     const SizedBox(width: 4),
@@ -599,7 +534,10 @@ class _RegisterScreenState extends State<RegisterScreen> {
                                 keyboardType: TextInputType.phone,
                                 decoration: const InputDecoration(
                                   hintText: 'Phone Number',
-                                  prefixIcon: Icon(LucideIcons.phone, color: AppTheme.textSecondary),
+                                  prefixIcon: Icon(
+                                    LucideIcons.phone,
+                                    color: AppTheme.textSecondary,
+                                  ),
                                 ),
                               ),
                             ),
@@ -610,14 +548,20 @@ class _RegisterScreenState extends State<RegisterScreen> {
                         // Ghana Card Input
                         const Text(
                           'Ghana Card Number',
-                          style: TextStyle(fontWeight: FontWeight.w600, fontSize: 14),
+                          style: TextStyle(
+                            fontWeight: FontWeight.w600,
+                            fontSize: 14,
+                          ),
                         ),
                         const SizedBox(height: 8),
                         TextField(
                           controller: _ghanaCardController,
                           decoration: InputDecoration(
                             hintText: 'Ghana Card Number (e.g. GHA-XXXXX)',
-                            prefixIcon: const Icon(LucideIcons.contact, color: AppTheme.textSecondary),
+                            prefixIcon: const Icon(
+                              LucideIcons.contact,
+                              color: AppTheme.textSecondary,
+                            ),
                             // Styled scanning icon container
                             suffixIcon: GestureDetector(
                               onTap: _captureGhanaCard,
@@ -625,7 +569,9 @@ class _RegisterScreenState extends State<RegisterScreen> {
                                 margin: const EdgeInsets.all(8),
                                 padding: const EdgeInsets.all(8),
                                 decoration: BoxDecoration(
-                                  color: AppTheme.primaryColor.withOpacity(0.08),
+                                  color: AppTheme.primaryColor.withOpacity(
+                                    0.08,
+                                  ),
                                   borderRadius: BorderRadius.circular(8),
                                 ),
                                 child: const Icon(
@@ -644,7 +590,9 @@ class _RegisterScreenState extends State<RegisterScreen> {
                             Container(
                               padding: const EdgeInsets.all(2),
                               decoration: BoxDecoration(
-                                color: _ghanaCardImage != null ? AppTheme.successColor : Colors.grey,
+                                color: _ghanaCardImage != null
+                                    ? AppTheme.successColor
+                                    : Colors.grey,
                                 shape: BoxShape.circle,
                               ),
                               child: const Icon(
@@ -656,11 +604,13 @@ class _RegisterScreenState extends State<RegisterScreen> {
                             const SizedBox(width: 6),
                             Expanded(
                               child: Text(
-                                _ghanaCardImage != null 
-                                  ? 'Card photo attached.' 
-                                  : 'Tap the camera icon to take a photo of your card.',
+                                _ghanaCardImage != null
+                                    ? 'Card photo attached.'
+                                    : 'Tap the camera icon to take a photo of your card.',
                                 style: TextStyle(
-                                  color: _ghanaCardImage != null ? AppTheme.successColor : AppTheme.textSecondary,
+                                  color: _ghanaCardImage != null
+                                      ? AppTheme.successColor
+                                      : AppTheme.textSecondary,
                                   fontSize: 11,
                                 ),
                               ),
@@ -672,7 +622,10 @@ class _RegisterScreenState extends State<RegisterScreen> {
                         // Facial Liveness Check UI
                         const Text(
                           'Identity Verification',
-                          style: TextStyle(fontWeight: FontWeight.w600, fontSize: 14),
+                          style: TextStyle(
+                            fontWeight: FontWeight.w600,
+                            fontSize: 14,
+                          ),
                         ),
                         const SizedBox(height: 8),
                         GestureDetector(
@@ -680,9 +633,13 @@ class _RegisterScreenState extends State<RegisterScreen> {
                           child: Container(
                             padding: const EdgeInsets.all(16),
                             decoration: BoxDecoration(
-                              color: _livenessVerified ? const Color(0xFFDCFCE7) : Colors.white,
+                              color: _livenessVerified
+                                  ? const Color(0xFFDCFCE7)
+                                  : Colors.white,
                               border: Border.all(
-                                color: _livenessVerified ? const Color(0xFF16A34A) : const Color(0xFFE5E7EB),
+                                color: _livenessVerified
+                                    ? const Color(0xFF16A34A)
+                                    : const Color(0xFFE5E7EB),
                                 width: _livenessVerified ? 2 : 1,
                               ),
                               borderRadius: BorderRadius.circular(12),
@@ -690,21 +647,30 @@ class _RegisterScreenState extends State<RegisterScreen> {
                             child: Row(
                               children: [
                                 Icon(
-                                  _livenessVerified ? LucideIcons.checkCircle2 : LucideIcons.scanFace,
-                                  color: _livenessVerified ? const Color(0xFF16A34A) : AppTheme.primaryColor,
+                                  _livenessVerified
+                                      ? LucideIcons.checkCircle2
+                                      : LucideIcons.scanFace,
+                                  color: _livenessVerified
+                                      ? const Color(0xFF16A34A)
+                                      : AppTheme.primaryColor,
                                   size: 28,
                                 ),
                                 const SizedBox(width: 16),
                                 Expanded(
                                   child: Column(
-                                    crossAxisAlignment: CrossAxisAlignment.start,
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.start,
                                     children: [
                                       Text(
-                                        _livenessVerified ? 'Face Verified' : 'Facial Verification',
+                                        _livenessVerified
+                                            ? 'Face Verified'
+                                            : 'Facial Verification',
                                         style: TextStyle(
                                           fontWeight: FontWeight.bold,
                                           fontSize: 16,
-                                          color: _livenessVerified ? const Color(0xFF16A34A) : AppTheme.textPrimary,
+                                          color: _livenessVerified
+                                              ? const Color(0xFF16A34A)
+                                              : AppTheme.textPrimary,
                                         ),
                                       ),
                                       const SizedBox(height: 4),
@@ -714,14 +680,19 @@ class _RegisterScreenState extends State<RegisterScreen> {
                                             : 'Take a quick selfie to prove you are human.',
                                         style: TextStyle(
                                           fontSize: 12,
-                                          color: _livenessVerified ? const Color(0xFF15803D) : AppTheme.textSecondary,
+                                          color: _livenessVerified
+                                              ? const Color(0xFF15803D)
+                                              : AppTheme.textSecondary,
                                         ),
                                       ),
                                     ],
                                   ),
                                 ),
                                 if (!_livenessVerified)
-                                  const Icon(LucideIcons.chevronRight, color: AppTheme.textSecondary),
+                                  const Icon(
+                                    LucideIcons.chevronRight,
+                                    color: AppTheme.textSecondary,
+                                  ),
                               ],
                             ),
                           ),
@@ -731,7 +702,10 @@ class _RegisterScreenState extends State<RegisterScreen> {
                         // Password Field
                         const Text(
                           'Password',
-                          style: TextStyle(fontWeight: FontWeight.w600, fontSize: 14),
+                          style: TextStyle(
+                            fontWeight: FontWeight.w600,
+                            fontSize: 14,
+                          ),
                         ),
                         const SizedBox(height: 8),
                         TextField(
@@ -739,10 +713,15 @@ class _RegisterScreenState extends State<RegisterScreen> {
                           obscureText: _obscurePassword,
                           decoration: InputDecoration(
                             hintText: 'Password',
-                            prefixIcon: const Icon(LucideIcons.lock, color: AppTheme.textSecondary),
+                            prefixIcon: const Icon(
+                              LucideIcons.lock,
+                              color: AppTheme.textSecondary,
+                            ),
                             suffixIcon: IconButton(
                               icon: Icon(
-                                _obscurePassword ? LucideIcons.eye : LucideIcons.eyeOff,
+                                _obscurePassword
+                                    ? LucideIcons.eye
+                                    : LucideIcons.eyeOff,
                                 color: AppTheme.textSecondary,
                               ),
                               onPressed: () {
@@ -758,7 +737,10 @@ class _RegisterScreenState extends State<RegisterScreen> {
                         // Confirm Password Field
                         const Text(
                           'Confirm Password',
-                          style: TextStyle(fontWeight: FontWeight.w600, fontSize: 14),
+                          style: TextStyle(
+                            fontWeight: FontWeight.w600,
+                            fontSize: 14,
+                          ),
                         ),
                         const SizedBox(height: 8),
                         TextField(
@@ -766,15 +748,21 @@ class _RegisterScreenState extends State<RegisterScreen> {
                           obscureText: _obscureConfirmPassword,
                           decoration: InputDecoration(
                             hintText: 'Confirm Password',
-                            prefixIcon: const Icon(LucideIcons.lock, color: AppTheme.textSecondary),
+                            prefixIcon: const Icon(
+                              LucideIcons.lock,
+                              color: AppTheme.textSecondary,
+                            ),
                             suffixIcon: IconButton(
                               icon: Icon(
-                                _obscureConfirmPassword ? LucideIcons.eye : LucideIcons.eyeOff,
+                                _obscureConfirmPassword
+                                    ? LucideIcons.eye
+                                    : LucideIcons.eyeOff,
                                 color: AppTheme.textSecondary,
                               ),
                               onPressed: () {
                                 setState(() {
-                                  _obscureConfirmPassword = !_obscureConfirmPassword;
+                                  _obscureConfirmPassword =
+                                      !_obscureConfirmPassword;
                                 });
                               },
                             ),
@@ -803,7 +791,10 @@ class _RegisterScreenState extends State<RegisterScreen> {
                               child: Text.rich(
                                 TextSpan(
                                   text: 'I agree to the ',
-                                  style: TextStyle(fontSize: 13, color: AppTheme.textSecondary),
+                                  style: TextStyle(
+                                    fontSize: 13,
+                                    color: AppTheme.textSecondary,
+                                  ),
                                   children: [
                                     TextSpan(
                                       text: 'Terms of Service',
@@ -843,7 +834,9 @@ class _RegisterScreenState extends State<RegisterScreen> {
                           children: [
                             Expanded(child: Divider(color: Colors.grey[300])),
                             Padding(
-                              padding: const EdgeInsets.symmetric(horizontal: 16),
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 16,
+                              ),
                               child: Text(
                                 'OR',
                                 style: TextStyle(
@@ -868,7 +861,9 @@ class _RegisterScreenState extends State<RegisterScreen> {
                             ),
                             GestureDetector(
                               onTap: () {
-                                Navigator.pop(context); // smoothly slides back to login
+                                Navigator.pop(
+                                  context,
+                                ); // smoothly slides back to login
                               },
                               child: const Text(
                                 'Sign In',

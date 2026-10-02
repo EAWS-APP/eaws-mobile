@@ -13,7 +13,8 @@ import 'reactions_comments_screen.dart';
 import 'incident_api.dart';
 
 // Shared in-memory list of reports to support real-time dynamic posting during runtime
-final ValueNotifier<List<Map<String, dynamic>>> communityReportsNotifier = ValueNotifier<List<Map<String, dynamic>>>([
+final ValueNotifier<List<Map<String, dynamic>>>
+communityReportsNotifier = ValueNotifier<List<Map<String, dynamic>>>([
   {
     'id': 1,
     'userName': 'Kwame Mensah',
@@ -24,8 +25,10 @@ final ValueNotifier<List<Map<String, dynamic>>> communityReportsNotifier = Value
     'category': 'FLOOD',
     'categoryColor': const Color(0xFFEF4444),
     'title': 'Rising water levels on Liberation Road',
-    'description': 'Water has reached knee level near the traffic light. Avoid the area and seek alternative bypass routes.',
-    'imageAsset': 'assets/images/flood.jpg', // we will use fallback beautiful network image or elegant UI card
+    'description':
+        'Water has reached knee level near the traffic light. Avoid the area and seek alternative bypass routes.',
+    'imageAsset':
+        'assets/images/flood.jpg', // we will use fallback beautiful network image or elegant UI card
     'severity': 'CRITICAL',
     'location': 'Accra, Ghana',
     'likes': 24,
@@ -42,7 +45,8 @@ final ValueNotifier<List<Map<String, dynamic>>> communityReportsNotifier = Value
     'category': 'FIRE',
     'categoryColor': const Color(0xFFF59E0B),
     'title': 'Bushfire spotted near Achimota Forest',
-    'description': 'Thick smoke visible from the main road. Fire service has been called and dispatchers are en-route.',
+    'description':
+        'Thick smoke visible from the main road. Fire service has been called and dispatchers are en-route.',
     'imageAsset': 'assets/images/fire.jpg',
     'severity': 'WARNING',
     'location': 'Achimota, Accra',
@@ -60,7 +64,8 @@ final ValueNotifier<List<Map<String, dynamic>>> communityReportsNotifier = Value
     'category': 'MEDICAL',
     'categoryColor': const Color(0xFF3B82F6),
     'title': 'Injured person near Tema Station',
-    'description': 'Someone collapsed near the bus terminal. Ambulance has been contacted and is currently on the way.',
+    'description':
+        'Someone collapsed near the bus terminal. Ambulance has been contacted and is currently on the way.',
     'imageAsset': null,
     'severity': 'MEDIUM',
     'location': 'Tema, Ghana',
@@ -80,11 +85,27 @@ class CommunityFeedScreen extends StatefulWidget {
 class _CommunityFeedScreenState extends State<CommunityFeedScreen> {
   Timer? _feedRefreshTimer;
   String _selectedCategory = 'All';
-  final List<String> _categories = ['All', 'Nearby', 'Updates', 'Flood', 'Fire', 'Suspicious', 'Medical'];
+  final List<String> _categories = [
+    'All',
+    'Nearby',
+    'Updates',
+    'Flood',
+    'Fire',
+    'Suspicious',
+    'Medical',
+  ];
 
   // Upgraded live filtering & search options matching screen 4
   String _searchQuery = '';
-  Set<String> _activeTypes = {'Flood', 'Fire', 'Medical', 'Suspicious', 'Police', 'Earthquake', 'Other'};
+  Set<String> _activeTypes = {
+    'Flood',
+    'Fire',
+    'Medical',
+    'Suspicious',
+    'Police',
+    'Earthquake',
+    'Other',
+  };
   Set<String> _activeSeverities = {'CRITICAL', 'WARNING', 'MEDIUM', 'LOW'};
   double _distanceFromMe = 15.0;
   String _timeRange = 'All Time';
@@ -94,7 +115,10 @@ class _CommunityFeedScreenState extends State<CommunityFeedScreen> {
   void initState() {
     super.initState();
     _loadIncidentFeed();
-    _feedRefreshTimer = Timer.periodic(const Duration(seconds: 10), (_) => _loadIncidentFeed());
+    _feedRefreshTimer = Timer.periodic(
+      const Duration(seconds: 10),
+      (_) => _loadIncidentFeed(),
+    );
   }
 
   @override
@@ -106,7 +130,7 @@ class _CommunityFeedScreenState extends State<CommunityFeedScreen> {
   Future<void> _loadIncidentFeed() async {
     try {
       // Fetch incidents and community posts in parallel
-      final results = await Future.wait([
+      final results = await Future.wait<dynamic>([
         IncidentApi.instance.getFeed(sort: _sortBy),
         IncidentApi.instance.getCommunityPosts(),
       ]);
@@ -150,7 +174,9 @@ class _CommunityFeedScreenState extends State<CommunityFeedScreen> {
           'likes': p['likes_count'] ?? 0,
           'commentsCount': p['replies_count'] ?? 0,
           'replies': List<Map<String, dynamic>>.from(
-            (p['replies'] as List? ?? []).map((r) => Map<String, dynamic>.from(r as Map))
+            (p['replies'] as List? ?? []).map(
+              (r) => Map<String, dynamic>.from(r as Map),
+            ),
           ),
           'isLiked': likedIds.contains(p['id'].toString()),
           'imageAsset': p['image_url'],
@@ -158,10 +184,14 @@ class _CommunityFeedScreenState extends State<CommunityFeedScreen> {
       }).toList();
 
       // Merge and sort chronologically (newest first)
-      final List<Map<String, dynamic>> merged = List<Map<String, dynamic>>.from([...incidentCards, ...postCards]);
+      final List<Map<String, dynamic>> merged = List<Map<String, dynamic>>.from(
+        [...incidentCards, ...postCards],
+      );
       merged.sort((a, b) {
-        final ta = DateTime.tryParse(a['createdAt']?.toString() ?? '') ?? DateTime(0);
-        final tb = DateTime.tryParse(b['createdAt']?.toString() ?? '') ?? DateTime(0);
+        final ta =
+            DateTime.tryParse(a['createdAt']?.toString() ?? '') ?? DateTime(0);
+        final tb =
+            DateTime.tryParse(b['createdAt']?.toString() ?? '') ?? DateTime(0);
         return tb.compareTo(ta);
       });
 
@@ -198,7 +228,8 @@ class _CommunityFeedScreenState extends State<CommunityFeedScreen> {
             // Drag handle
             Center(
               child: Container(
-                width: 40, height: 4,
+                width: 40,
+                height: 4,
                 decoration: BoxDecoration(
                   color: const Color(0xFFE5E7EB),
                   borderRadius: BorderRadius.circular(2),
@@ -209,7 +240,9 @@ class _CommunityFeedScreenState extends State<CommunityFeedScreen> {
             const Text(
               'What would you like to do?',
               style: TextStyle(
-                fontSize: 17, fontWeight: FontWeight.bold, color: AppTheme.textPrimary,
+                fontSize: 17,
+                fontWeight: FontWeight.bold,
+                color: AppTheme.textPrimary,
               ),
             ),
             const SizedBox(height: 6),
@@ -225,13 +258,17 @@ class _CommunityFeedScreenState extends State<CommunityFeedScreen> {
               color: const Color(0xFF8B5CF6),
               bgColor: const Color(0xFFEDE9FE),
               title: 'Share a Community Update',
-              subtitle: 'Chat, tips, alerts — anything your neighbours should know',
-              onTap: () {
+              subtitle:
+                  'Chat, tips, alerts — anything your neighbours should know',
+              onTap: () async {
                 Navigator.pop(ctx);
-                Navigator.push(
+                final created = await Navigator.push<bool>(
                   context,
-                  MaterialPageRoute(builder: (_) => const CommunityPostScreen()),
+                  MaterialPageRoute(
+                    builder: (_) => const CommunityPostScreen(),
+                  ),
                 );
+                if (created == true) _loadIncidentFeed();
               },
             ),
             const SizedBox(height: 12),
@@ -247,7 +284,9 @@ class _CommunityFeedScreenState extends State<CommunityFeedScreen> {
                 Navigator.pop(ctx);
                 Navigator.push(
                   context,
-                  MaterialPageRoute(builder: (_) => const ReportIncidentScreen()),
+                  MaterialPageRoute(
+                    builder: (_) => const ReportIncidentScreen(),
+                  ),
                 );
               },
             ),
@@ -288,7 +327,11 @@ class _CommunityFeedScreenState extends State<CommunityFeedScreen> {
                 children: [
                   // Premium "My Reports" icon shortcut button linking Dashboard
                   IconButton(
-                    icon: const Icon(LucideIcons.fileText, color: Colors.white, size: 22),
+                    icon: const Icon(
+                      LucideIcons.fileText,
+                      color: Colors.white,
+                      size: 22,
+                    ),
                     onPressed: () {
                       HapticFeedback.lightImpact();
                       Navigator.push(
@@ -310,7 +353,11 @@ class _CommunityFeedScreenState extends State<CommunityFeedScreen> {
                   ),
                   // Search & Sliders Filter icon
                   IconButton(
-                    icon: const Icon(LucideIcons.sliders, color: Colors.white, size: 22),
+                    icon: const Icon(
+                      LucideIcons.sliders,
+                      color: Colors.white,
+                      size: 22,
+                    ),
                     onPressed: () {
                       HapticFeedback.lightImpact();
                       _showFilterBottomSheet();
@@ -338,8 +385,9 @@ class _CommunityFeedScreenState extends State<CommunityFeedScreen> {
                     itemCount: _categories.length,
                     itemBuilder: (context, index) {
                       final cat = _categories[index];
-                      final isSelected = _selectedCategory.toLowerCase() == cat.toLowerCase();
-                      
+                      final isSelected =
+                          _selectedCategory.toLowerCase() == cat.toLowerCase();
+
                       return Padding(
                         padding: const EdgeInsets.only(right: 8.0),
                         child: GestureDetector(
@@ -350,21 +398,29 @@ class _CommunityFeedScreenState extends State<CommunityFeedScreen> {
                             });
                           },
                           child: Container(
-                            padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 8),
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 18,
+                              vertical: 8,
+                            ),
                             decoration: BoxDecoration(
-                              color: isSelected ? AppTheme.primaryColor : Colors.white,
+                              color: isSelected
+                                  ? AppTheme.primaryColor
+                                  : Colors.white,
                               borderRadius: BorderRadius.circular(20),
                               border: Border.all(
-                                color: isSelected ? Colors.transparent : const Color(0xFFE5E7EB),
+                                color: isSelected
+                                    ? Colors.transparent
+                                    : const Color(0xFFE5E7EB),
                                 width: 1.5,
                               ),
                               boxShadow: isSelected
                                   ? [
                                       BoxShadow(
-                                        color: AppTheme.primaryColor.withOpacity(0.15),
+                                        color: AppTheme.primaryColor
+                                            .withOpacity(0.15),
                                         blurRadius: 6,
                                         offset: const Offset(0, 2),
-                                      )
+                                      ),
                                     ]
                                   : null,
                             ),
@@ -374,15 +430,21 @@ class _CommunityFeedScreenState extends State<CommunityFeedScreen> {
                                   Icon(
                                     LucideIcons.mapPin,
                                     size: 13,
-                                    color: isSelected ? Colors.white : AppTheme.textSecondary,
+                                    color: isSelected
+                                        ? Colors.white
+                                        : AppTheme.textSecondary,
                                   ),
                                   const SizedBox(width: 4),
                                 ],
                                 Text(
                                   cat,
                                   style: TextStyle(
-                                    color: isSelected ? Colors.white : AppTheme.textSecondary,
-                                    fontWeight: isSelected ? FontWeight.bold : FontWeight.w600,
+                                    color: isSelected
+                                        ? Colors.white
+                                        : AppTheme.textSecondary,
+                                    fontWeight: isSelected
+                                        ? FontWeight.bold
+                                        : FontWeight.w600,
                                     fontSize: 13.5,
                                   ),
                                 ),
@@ -444,28 +506,42 @@ class _CommunityFeedScreenState extends State<CommunityFeedScreen> {
                       final filteredReports = reports.where((report) {
                         // 1. Search query filter
                         if (_searchQuery.isNotEmpty) {
-                          final title = report['title'].toString().toLowerCase();
-                          final desc = report['description'].toString().toLowerCase();
-                          final loc = report['location'].toString().toLowerCase();
+                          final title = report['title']
+                              .toString()
+                              .toLowerCase();
+                          final desc = report['description']
+                              .toString()
+                              .toLowerCase();
+                          final loc = report['location']
+                              .toString()
+                              .toLowerCase();
                           final query = _searchQuery.toLowerCase();
-                          if (!title.contains(query) && !desc.contains(query) && !loc.contains(query)) {
+                          if (!title.contains(query) &&
+                              !desc.contains(query) &&
+                              !loc.contains(query)) {
                             return false;
                           }
                         }
 
                         // 2. Incident Category tab selection
                         final cat = report['category'].toString().toLowerCase();
-                        if (_selectedCategory != 'All' && _selectedCategory != 'Nearby') {
+                        if (_selectedCategory != 'All' &&
+                            _selectedCategory != 'Nearby') {
                           if (_selectedCategory == 'Updates') {
-                            final isUpdate = report['post_type'] == 'community' || cat == 'community';
+                            final isUpdate =
+                                report['post_type'] == 'community' ||
+                                cat == 'community';
                             if (!isUpdate) return false;
                           } else {
-                            if (cat != _selectedCategory.toLowerCase()) return false;
+                            if (cat != _selectedCategory.toLowerCase())
+                              return false;
                           }
                         }
 
                         // Community posts bypass the incident-type chip filter entirely
-                        final isCommunityType = report['post_type'] == 'community' || cat == 'community';
+                        final isCommunityType =
+                            report['post_type'] == 'community' ||
+                            cat == 'community';
                         if (!isCommunityType) {
                           // Map backend category name to UI type label
                           String type = 'Other';
@@ -473,17 +549,24 @@ class _CommunityFeedScreenState extends State<CommunityFeedScreen> {
                           if (cat == 'fire') type = 'Fire';
                           if (cat == 'medical') type = 'Medical';
                           if (cat == 'suspicious') type = 'Suspicious';
-                          if (cat == 'police' || cat == 'crime') type = 'Police';
+                          if (cat == 'police' || cat == 'crime')
+                            type = 'Police';
                           if (cat == 'earthquake') type = 'Earthquake';
                           if (!_activeTypes.contains(type)) return false;
                         }
 
                         // 3. Severity filter — community posts always pass
-                        final isCommunity = report['post_type'] == 'community' ||
-                            report['category'].toString().toUpperCase() == 'COMMUNITY';
+                        final isCommunity =
+                            report['post_type'] == 'community' ||
+                            report['category'].toString().toUpperCase() ==
+                                'COMMUNITY';
                         if (!isCommunity) {
-                          final sev = report['severity'].toString().toUpperCase();
-                          if (sev != 'PENDING TRIAGE' && !_activeSeverities.contains(sev)) return false;
+                          final sev = report['severity']
+                              .toString()
+                              .toUpperCase();
+                          if (sev != 'PENDING TRIAGE' &&
+                              !_activeSeverities.contains(sev))
+                            return false;
                         }
 
                         return true;
@@ -491,9 +574,16 @@ class _CommunityFeedScreenState extends State<CommunityFeedScreen> {
 
                       // Sort dynamically matching sort options
                       if (_sortBy == 'Most Reactions') {
-                        filteredReports.sort((a, b) => (b['likes'] ?? 0).compareTo(a['likes'] ?? 0));
+                        filteredReports.sort(
+                          (a, b) =>
+                              (b['likes'] ?? 0).compareTo(a['likes'] ?? 0),
+                        );
                       } else {
-                        filteredReports.sort((a, b) => _reportTimestamp(b).compareTo(_reportTimestamp(a)));
+                        filteredReports.sort(
+                          (a, b) => _reportTimestamp(
+                            b,
+                          ).compareTo(_reportTimestamp(a)),
+                        );
                       }
 
                       if (filteredReports.isEmpty) {
@@ -501,7 +591,11 @@ class _CommunityFeedScreenState extends State<CommunityFeedScreen> {
                           child: Column(
                             mainAxisAlignment: MainAxisAlignment.center,
                             children: const [
-                              Icon(LucideIcons.newspaper, size: 54, color: Color(0xFFD1D5DB)),
+                              Icon(
+                                LucideIcons.newspaper,
+                                size: 54,
+                                color: Color(0xFFD1D5DB),
+                              ),
                               SizedBox(height: 12),
                               Text(
                                 'No matching reports found',
@@ -514,7 +608,10 @@ class _CommunityFeedScreenState extends State<CommunityFeedScreen> {
                               SizedBox(height: 4),
                               Text(
                                 'Try clearing your alert filters.',
-                                style: TextStyle(color: Colors.grey, fontSize: 12),
+                                style: TextStyle(
+                                  color: Colors.grey,
+                                  fontSize: 12,
+                                ),
                               ),
                             ],
                           ),
@@ -527,20 +624,23 @@ class _CommunityFeedScreenState extends State<CommunityFeedScreen> {
                         itemCount: filteredReports.length,
                         itemBuilder: (context, index) {
                           final report = filteredReports[index];
-                          
+
                           // Route community posts to reply sheet; incidents to detail screen
                           return GestureDetector(
                             onTap: () {
                               HapticFeedback.lightImpact();
-                              final isCommunity = report['post_type'] == 'community' ||
-                                  report['category'].toString().toUpperCase() == 'COMMUNITY';
+                              final isCommunity =
+                                  report['post_type'] == 'community' ||
+                                  report['category'].toString().toUpperCase() ==
+                                      'COMMUNITY';
                               if (isCommunity) {
                                 Navigator.push(
                                   context,
                                   MaterialPageRoute(
-                                    builder: (context) => CommunityPostDetailScreen(
-                                      report: report,
-                                    ),
+                                    builder: (context) =>
+                                        CommunityPostDetailScreen(
+                                          report: report,
+                                        ),
                                   ),
                                 );
                               } else {
@@ -550,8 +650,13 @@ class _CommunityFeedScreenState extends State<CommunityFeedScreen> {
                                     builder: (context) => IncidentDetailScreen(
                                       report: report,
                                       onUpdate: (updated) {
-                                        final list = List<Map<String, dynamic>>.from(communityReportsNotifier.value);
-                                        final idx = list.indexWhere((r) => r['id'] == report['id']);
+                                        final list =
+                                            List<Map<String, dynamic>>.from(
+                                              communityReportsNotifier.value,
+                                            );
+                                        final idx = list.indexWhere(
+                                          (r) => r['id'] == report['id'],
+                                        );
                                         if (idx != -1) {
                                           list[idx] = updated;
                                           communityReportsNotifier.value = list;
@@ -596,9 +701,13 @@ class _CommunityFeedScreenState extends State<CommunityFeedScreen> {
   Widget _buildFeedCard(Map<String, dynamic> report) {
     final bool isLiked = report['isLiked'] ?? false;
     final int likeCount = report['likes'] ?? 0;
-    final int commentCount = report['commentsCount'] ?? 
-        (report['comments'] is List ? (report['comments'] as List).length : (report['comments'] ?? 0));
-    final bool isCommunity = report['post_type'] == 'community' ||
+    final int commentCount =
+        report['commentsCount'] ??
+        (report['comments'] is List
+            ? (report['comments'] as List).length
+            : (report['comments'] ?? 0));
+    final bool isCommunity =
+        report['post_type'] == 'community' ||
         report['category'].toString().toUpperCase() == 'COMMUNITY';
 
     return Container(
@@ -642,7 +751,9 @@ class _CommunityFeedScreenState extends State<CommunityFeedScreen> {
                       children: [
                         CircleAvatar(
                           radius: 18,
-                          backgroundColor: report['avatarColor'].withOpacity(0.15),
+                          backgroundColor: report['avatarColor'].withOpacity(
+                            0.15,
+                          ),
                           child: Text(
                             report['initials'],
                             style: TextStyle(
@@ -690,7 +801,10 @@ class _CommunityFeedScreenState extends State<CommunityFeedScreen> {
                         ),
                         // Top Right Category Badge
                         Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 5),
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 9,
+                            vertical: 5,
+                          ),
                           decoration: BoxDecoration(
                             color: report['categoryColor'],
                             borderRadius: BorderRadius.circular(10),
@@ -710,7 +824,6 @@ class _CommunityFeedScreenState extends State<CommunityFeedScreen> {
                     const SizedBox(height: 12),
 
                     // Content/Title
-
                     if (isCommunity) ...[
                       Text(
                         report['title'],
@@ -752,15 +865,19 @@ class _CommunityFeedScreenState extends State<CommunityFeedScreen> {
                       _buildIncidentImage(
                         report['imageAsset'],
                         report['severity'],
-                        isLocalFile: !report['imageAsset'].startsWith('http') && !report['imageAsset'].startsWith('assets/'),
+                        isLocalFile:
+                            !report['imageAsset'].startsWith('http') &&
+                            !report['imageAsset'].startsWith('assets/'),
                         isVideo: report['isVideo'] == true,
                       ),
-                    ] else if (!isCommunity && report['category'] == 'FLOOD') ...[
+                    ] else if (!isCommunity &&
+                        report['category'] == 'FLOOD') ...[
                       _buildIncidentImage(
                         'https://images.unsplash.com/photo-1547683905-f686c993aae5?auto=format&fit=crop&q=80&w=800',
                         report['severity'],
                       ),
-                    ] else if (!isCommunity && report['category'] == 'FIRE') ...[
+                    ] else if (!isCommunity &&
+                        report['category'] == 'FIRE') ...[
                       _buildIncidentImage(
                         'https://images.unsplash.com/photo-1508873699372-7aeab60b44ab?auto=format&fit=crop&q=80&w=800',
                         report['severity'],
@@ -772,7 +889,10 @@ class _CommunityFeedScreenState extends State<CommunityFeedScreen> {
                     // Card Footer Location pin & likes + comments interaction stats
                     Row(
                       children: [
-                        if (report['location'].toString().trim().isNotEmpty) ...[
+                        if (report['location']
+                            .toString()
+                            .trim()
+                            .isNotEmpty) ...[
                           const Icon(
                             LucideIcons.mapPin,
                             size: 13,
@@ -802,15 +922,21 @@ class _CommunityFeedScreenState extends State<CommunityFeedScreen> {
                           child: Row(
                             children: [
                               Icon(
-                                isLiked ? Icons.thumb_up : Icons.thumb_up_outlined,
+                                isLiked
+                                    ? Icons.thumb_up
+                                    : Icons.thumb_up_outlined,
                                 size: 15,
-                                color: isLiked ? AppTheme.primaryColor : AppTheme.textSecondary,
+                                color: isLiked
+                                    ? AppTheme.primaryColor
+                                    : AppTheme.textSecondary,
                               ),
                               const SizedBox(width: 4),
                               Text(
                                 '$likeCount',
                                 style: TextStyle(
-                                  color: isLiked ? AppTheme.primaryColor : AppTheme.textSecondary,
+                                  color: isLiked
+                                      ? AppTheme.primaryColor
+                                      : AppTheme.textSecondary,
                                   fontSize: 12,
                                   fontWeight: FontWeight.bold,
                                 ),
@@ -830,8 +956,13 @@ class _CommunityFeedScreenState extends State<CommunityFeedScreen> {
                                 builder: (context) => ReactionsCommentsScreen(
                                   report: report,
                                   onUpdate: (updated) {
-                                    final list = List<Map<String, dynamic>>.from(communityReportsNotifier.value);
-                                    final idx = list.indexWhere((r) => r['id'] == report['id']);
+                                    final list =
+                                        List<Map<String, dynamic>>.from(
+                                          communityReportsNotifier.value,
+                                        );
+                                    final idx = list.indexWhere(
+                                      (r) => r['id'] == report['id'],
+                                    );
                                     if (idx != -1) {
                                       list[idx] = updated;
                                       communityReportsNotifier.value = list;
@@ -872,7 +1003,12 @@ class _CommunityFeedScreenState extends State<CommunityFeedScreen> {
     );
   }
 
-  Widget _buildIncidentImage(String imageUrl, String label, {bool isLocalFile = false, bool isVideo = false}) {
+  Widget _buildIncidentImage(
+    String imageUrl,
+    String label, {
+    bool isLocalFile = false,
+    bool isVideo = false,
+  }) {
     ImageProvider imageProvider;
     if (isLocalFile) {
       imageProvider = FileImage(File(imageUrl));
@@ -888,17 +1024,12 @@ class _CommunityFeedScreenState extends State<CommunityFeedScreen> {
       width: double.infinity,
       decoration: BoxDecoration(
         borderRadius: BorderRadius.circular(16),
-        image: DecorationImage(
-          image: imageProvider,
-          fit: BoxFit.cover,
-        ),
+        image: DecorationImage(image: imageProvider, fit: BoxFit.cover),
       ),
       clipBehavior: Clip.antiAlias,
       child: Stack(
         children: [
-          Container(
-            color: Colors.black.withOpacity(isVideo ? 0.25 : 0.06),
-          ),
+          Container(color: Colors.black.withOpacity(isVideo ? 0.25 : 0.06)),
           if (isVideo)
             Center(
               child: Container(
@@ -926,7 +1057,9 @@ class _CommunityFeedScreenState extends State<CommunityFeedScreen> {
               child: Row(
                 children: [
                   Icon(
-                    label == 'CRITICAL' ? LucideIcons.alertTriangle : LucideIcons.flame,
+                    label == 'CRITICAL'
+                        ? LucideIcons.alertTriangle
+                        : LucideIcons.flame,
                     color: label == 'CRITICAL' ? Colors.red : Colors.orange,
                     size: 12,
                   ),
@@ -950,8 +1083,12 @@ class _CommunityFeedScreenState extends State<CommunityFeedScreen> {
   }
 
   Future<void> _toggleLike(dynamic id) async {
-    final updatedList = List<Map<String, dynamic>>.from(communityReportsNotifier.value);
-    final index = updatedList.indexWhere((r) => r['id'].toString() == id.toString());
+    final updatedList = List<Map<String, dynamic>>.from(
+      communityReportsNotifier.value,
+    );
+    final index = updatedList.indexWhere(
+      (r) => r['id'].toString() == id.toString(),
+    );
     if (index != -1) {
       final report = Map<String, dynamic>.from(updatedList[index]);
       final isLiked = report['isLiked'] ?? false;
@@ -1015,7 +1152,11 @@ class _CommunityFeedScreenState extends State<CommunityFeedScreen> {
                             mainAxisAlignment: MainAxisAlignment.spaceBetween,
                             children: [
                               IconButton(
-                                icon: const Icon(Icons.close, color: AppTheme.textPrimary, size: 24),
+                                icon: const Icon(
+                                  Icons.close,
+                                  color: AppTheme.textPrimary,
+                                  size: 24,
+                                ),
                                 onPressed: () => Navigator.pop(context),
                               ),
                               const Text(
@@ -1031,8 +1172,20 @@ class _CommunityFeedScreenState extends State<CommunityFeedScreen> {
                                   HapticFeedback.lightImpact();
                                   setSheetState(() {
                                     _searchQuery = '';
-                                    _activeTypes = {'Flood', 'Fire', 'Medical', 'Suspicious', 'Earthquake', 'Other'};
-                                    _activeSeverities = {'CRITICAL', 'WARNING', 'MEDIUM', 'LOW'};
+                                    _activeTypes = {
+                                      'Flood',
+                                      'Fire',
+                                      'Medical',
+                                      'Suspicious',
+                                      'Earthquake',
+                                      'Other',
+                                    };
+                                    _activeSeverities = {
+                                      'CRITICAL',
+                                      'WARNING',
+                                      'MEDIUM',
+                                      'LOW',
+                                    };
                                     _distanceFromMe = 15.0;
                                     _timeRange = 'All Time';
                                     _sortBy = 'Most Recent';
@@ -1056,23 +1209,42 @@ class _CommunityFeedScreenState extends State<CommunityFeedScreen> {
                             decoration: BoxDecoration(
                               color: Colors.white,
                               borderRadius: BorderRadius.circular(16),
-                              border: Border.all(color: const Color(0xFFE5E7EB), width: 1.5),
+                              border: Border.all(
+                                color: const Color(0xFFE5E7EB),
+                                width: 1.5,
+                              ),
                             ),
                             padding: const EdgeInsets.symmetric(horizontal: 16),
                             child: Row(
                               children: [
-                                const Icon(LucideIcons.search, color: AppTheme.textSecondary, size: 20),
+                                const Icon(
+                                  LucideIcons.search,
+                                  color: AppTheme.textSecondary,
+                                  size: 20,
+                                ),
                                 const SizedBox(width: 10),
                                 Expanded(
                                   child: TextField(
-                                    controller: TextEditingController(text: _searchQuery)
-                                      ..selection = TextSelection.fromPosition(TextPosition(offset: _searchQuery.length)),
+                                    controller:
+                                        TextEditingController(
+                                            text: _searchQuery,
+                                          )
+                                          ..selection =
+                                              TextSelection.fromPosition(
+                                                TextPosition(
+                                                  offset: _searchQuery.length,
+                                                ),
+                                              ),
                                     onChanged: (val) {
                                       _searchQuery = val;
                                     },
                                     decoration: const InputDecoration(
-                                      hintText: 'Search incidents, locations...',
-                                      hintStyle: TextStyle(color: Colors.grey, fontSize: 14),
+                                      hintText:
+                                          'Search incidents, locations...',
+                                      hintStyle: TextStyle(
+                                        color: Colors.grey,
+                                        fontSize: 14,
+                                      ),
                                       border: InputBorder.none,
                                     ),
                                     style: const TextStyle(fontSize: 14.5),
@@ -1085,7 +1257,11 @@ class _CommunityFeedScreenState extends State<CommunityFeedScreen> {
                                         _searchQuery = '';
                                       });
                                     },
-                                    child: const Icon(Icons.cancel, color: Colors.grey, size: 18),
+                                    child: const Icon(
+                                      Icons.cancel,
+                                      color: Colors.grey,
+                                      size: 18,
+                                    ),
                                   ),
                               ],
                             ),
@@ -1110,43 +1286,59 @@ class _CommunityFeedScreenState extends State<CommunityFeedScreen> {
                             childAspectRatio: 2.2,
                             crossAxisSpacing: 10,
                             mainAxisSpacing: 10,
-                            children: ['Flood', 'Fire', 'Medical', 'Suspicious', 'Earthquake', 'Other'].map((type) {
-                              final bool isSelected = _activeTypes.contains(type);
-                              return GestureDetector(
-                                onTap: () {
-                                  HapticFeedback.lightImpact();
-                                  setSheetState(() {
-                                    if (isSelected) {
-                                      if (_activeTypes.length > 1) {
-                                        _activeTypes.remove(type);
-                                      }
-                                    } else {
-                                      _activeTypes.add(type);
-                                    }
-                                  });
-                                },
-                                child: Container(
-                                  decoration: BoxDecoration(
-                                    color: isSelected ? AppTheme.primaryColor : Colors.white,
-                                    borderRadius: BorderRadius.circular(12),
-                                    border: Border.all(
-                                      color: isSelected ? Colors.transparent : const Color(0xFFE5E7EB),
-                                      width: 1.5,
-                                    ),
-                                  ),
-                                  child: Center(
-                                    child: Text(
-                                      type,
-                                      style: TextStyle(
-                                        color: isSelected ? Colors.white : AppTheme.textSecondary,
-                                        fontWeight: FontWeight.bold,
-                                        fontSize: 12.5,
+                            children:
+                                [
+                                  'Flood',
+                                  'Fire',
+                                  'Medical',
+                                  'Suspicious',
+                                  'Earthquake',
+                                  'Other',
+                                ].map((type) {
+                                  final bool isSelected = _activeTypes.contains(
+                                    type,
+                                  );
+                                  return GestureDetector(
+                                    onTap: () {
+                                      HapticFeedback.lightImpact();
+                                      setSheetState(() {
+                                        if (isSelected) {
+                                          if (_activeTypes.length > 1) {
+                                            _activeTypes.remove(type);
+                                          }
+                                        } else {
+                                          _activeTypes.add(type);
+                                        }
+                                      });
+                                    },
+                                    child: Container(
+                                      decoration: BoxDecoration(
+                                        color: isSelected
+                                            ? AppTheme.primaryColor
+                                            : Colors.white,
+                                        borderRadius: BorderRadius.circular(12),
+                                        border: Border.all(
+                                          color: isSelected
+                                              ? Colors.transparent
+                                              : const Color(0xFFE5E7EB),
+                                          width: 1.5,
+                                        ),
+                                      ),
+                                      child: Center(
+                                        child: Text(
+                                          type,
+                                          style: TextStyle(
+                                            color: isSelected
+                                                ? Colors.white
+                                                : AppTheme.textSecondary,
+                                            fontWeight: FontWeight.bold,
+                                            fontSize: 12.5,
+                                          ),
+                                        ),
                                       ),
                                     ),
-                                  ),
-                                ),
-                              );
-                            }).toList(),
+                                  );
+                                }).toList(),
                           ),
                           const SizedBox(height: 24),
 
@@ -1165,18 +1357,25 @@ class _CommunityFeedScreenState extends State<CommunityFeedScreen> {
                             decoration: BoxDecoration(
                               color: Colors.white,
                               borderRadius: BorderRadius.circular(20),
-                              border: Border.all(color: const Color(0xFFE5E7EB), width: 1.5),
+                              border: Border.all(
+                                color: const Color(0xFFE5E7EB),
+                                width: 1.5,
+                              ),
                             ),
                             child: Column(
                               children: [
                                 _buildSeverityToggleRow(
                                   label: 'Critical',
                                   color: const Color(0xFFEF4444),
-                                  isActive: _activeSeverities.contains('CRITICAL'),
+                                  isActive: _activeSeverities.contains(
+                                    'CRITICAL',
+                                  ),
                                   onChanged: (val) {
                                     setSheetState(() {
-                                      if (val) _activeSeverities.add('CRITICAL');
-                                      else if (_activeSeverities.length > 1) _activeSeverities.remove('CRITICAL');
+                                      if (val)
+                                        _activeSeverities.add('CRITICAL');
+                                      else if (_activeSeverities.length > 1)
+                                        _activeSeverities.remove('CRITICAL');
                                     });
                                   },
                                 ),
@@ -1184,11 +1383,15 @@ class _CommunityFeedScreenState extends State<CommunityFeedScreen> {
                                 _buildSeverityToggleRow(
                                   label: 'High',
                                   color: const Color(0xFFF59E0B),
-                                  isActive: _activeSeverities.contains('WARNING'),
+                                  isActive: _activeSeverities.contains(
+                                    'WARNING',
+                                  ),
                                   onChanged: (val) {
                                     setSheetState(() {
-                                      if (val) _activeSeverities.add('WARNING');
-                                      else if (_activeSeverities.length > 1) _activeSeverities.remove('WARNING');
+                                      if (val)
+                                        _activeSeverities.add('WARNING');
+                                      else if (_activeSeverities.length > 1)
+                                        _activeSeverities.remove('WARNING');
                                     });
                                   },
                                 ),
@@ -1196,11 +1399,15 @@ class _CommunityFeedScreenState extends State<CommunityFeedScreen> {
                                 _buildSeverityToggleRow(
                                   label: 'Medium',
                                   color: const Color(0xFF3B82F6),
-                                  isActive: _activeSeverities.contains('MEDIUM'),
+                                  isActive: _activeSeverities.contains(
+                                    'MEDIUM',
+                                  ),
                                   onChanged: (val) {
                                     setSheetState(() {
-                                      if (val) _activeSeverities.add('MEDIUM');
-                                      else if (_activeSeverities.length > 1) _activeSeverities.remove('MEDIUM');
+                                      if (val)
+                                        _activeSeverities.add('MEDIUM');
+                                      else if (_activeSeverities.length > 1)
+                                        _activeSeverities.remove('MEDIUM');
                                     });
                                   },
                                 ),
@@ -1211,8 +1418,10 @@ class _CommunityFeedScreenState extends State<CommunityFeedScreen> {
                                   isActive: _activeSeverities.contains('LOW'),
                                   onChanged: (val) {
                                     setSheetState(() {
-                                      if (val) _activeSeverities.add('LOW');
-                                      else if (_activeSeverities.length > 1) _activeSeverities.remove('LOW');
+                                      if (val)
+                                        _activeSeverities.add('LOW');
+                                      else if (_activeSeverities.length > 1)
+                                        _activeSeverities.remove('LOW');
                                     });
                                   },
                                 ),
@@ -1249,9 +1458,15 @@ class _CommunityFeedScreenState extends State<CommunityFeedScreen> {
                             decoration: BoxDecoration(
                               color: Colors.white,
                               borderRadius: BorderRadius.circular(16),
-                              border: Border.all(color: const Color(0xFFE5E7EB), width: 1.5),
+                              border: Border.all(
+                                color: const Color(0xFFE5E7EB),
+                                width: 1.5,
+                              ),
                             ),
-                            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 10,
+                              vertical: 8,
+                            ),
                             child: Slider.adaptive(
                               value: _distanceFromMe,
                               min: 1.0,
@@ -1279,43 +1494,61 @@ class _CommunityFeedScreenState extends State<CommunityFeedScreen> {
                           ),
                           const SizedBox(height: 12),
                           Row(
-                            children: ['Last Hour', 'Today', 'This Week', 'All Time'].map((time) {
-                              final isSelected = _timeRange == time;
-                              return Expanded(
-                                child: Padding(
-                                  padding: const EdgeInsets.only(right: 6.0),
-                                  child: GestureDetector(
-                                    onTap: () {
-                                      HapticFeedback.lightImpact();
-                                      setSheetState(() {
-                                        _timeRange = time;
-                                      });
-                                    },
-                                    child: Container(
-                                      padding: const EdgeInsets.symmetric(vertical: 10),
-                                      decoration: BoxDecoration(
-                                        color: isSelected ? AppTheme.primaryColor : Colors.white,
-                                        borderRadius: BorderRadius.circular(10),
-                                        border: Border.all(
-                                          color: isSelected ? Colors.transparent : const Color(0xFFE5E7EB),
-                                          width: 1.5,
-                                        ),
+                            children:
+                                [
+                                  'Last Hour',
+                                  'Today',
+                                  'This Week',
+                                  'All Time',
+                                ].map((time) {
+                                  final isSelected = _timeRange == time;
+                                  return Expanded(
+                                    child: Padding(
+                                      padding: const EdgeInsets.only(
+                                        right: 6.0,
                                       ),
-                                      child: Center(
-                                        child: Text(
-                                          time,
-                                          style: TextStyle(
-                                            color: isSelected ? Colors.white : AppTheme.textSecondary,
-                                            fontWeight: FontWeight.bold,
-                                            fontSize: 11,
+                                      child: GestureDetector(
+                                        onTap: () {
+                                          HapticFeedback.lightImpact();
+                                          setSheetState(() {
+                                            _timeRange = time;
+                                          });
+                                        },
+                                        child: Container(
+                                          padding: const EdgeInsets.symmetric(
+                                            vertical: 10,
+                                          ),
+                                          decoration: BoxDecoration(
+                                            color: isSelected
+                                                ? AppTheme.primaryColor
+                                                : Colors.white,
+                                            borderRadius: BorderRadius.circular(
+                                              10,
+                                            ),
+                                            border: Border.all(
+                                              color: isSelected
+                                                  ? Colors.transparent
+                                                  : const Color(0xFFE5E7EB),
+                                              width: 1.5,
+                                            ),
+                                          ),
+                                          child: Center(
+                                            child: Text(
+                                              time,
+                                              style: TextStyle(
+                                                color: isSelected
+                                                    ? Colors.white
+                                                    : AppTheme.textSecondary,
+                                                fontWeight: FontWeight.bold,
+                                                fontSize: 11,
+                                              ),
+                                            ),
                                           ),
                                         ),
                                       ),
                                     ),
-                                  ),
-                                ),
-                              );
-                            }).toList(),
+                                  );
+                                }).toList(),
                           ),
                           const SizedBox(height: 24),
 
@@ -1334,26 +1567,35 @@ class _CommunityFeedScreenState extends State<CommunityFeedScreen> {
                             decoration: BoxDecoration(
                               color: Colors.white,
                               borderRadius: BorderRadius.circular(16),
-                              border: Border.all(color: const Color(0xFFE5E7EB), width: 1.5),
+                              border: Border.all(
+                                color: const Color(0xFFE5E7EB),
+                                width: 1.5,
+                              ),
                             ),
                             child: Column(
                               children: [
                                 _buildSortRadioRow(
                                   label: 'Most Recent',
                                   isSelected: _sortBy == 'Most Recent',
-                                  onTap: () => setSheetState(() => _sortBy = 'Most Recent'),
+                                  onTap: () => setSheetState(
+                                    () => _sortBy = 'Most Recent',
+                                  ),
                                 ),
                                 const Divider(height: 1),
                                 _buildSortRadioRow(
                                   label: 'Nearest to Me',
                                   isSelected: _sortBy == 'Nearest to Me',
-                                  onTap: () => setSheetState(() => _sortBy = 'Nearest to Me'),
+                                  onTap: () => setSheetState(
+                                    () => _sortBy = 'Nearest to Me',
+                                  ),
                                 ),
                                 const Divider(height: 1),
                                 _buildSortRadioRow(
                                   label: 'Most Reactions',
                                   isSelected: _sortBy == 'Most Reactions',
-                                  onTap: () => setSheetState(() => _sortBy = 'Most Reactions'),
+                                  onTap: () => setSheetState(
+                                    () => _sortBy = 'Most Reactions',
+                                  ),
                                 ),
                               ],
                             ),
@@ -1381,12 +1623,16 @@ class _CommunityFeedScreenState extends State<CommunityFeedScreen> {
                         child: ElevatedButton(
                           onPressed: () {
                             HapticFeedback.mediumImpact();
-                            setState(() {}); // Apply state change dynamically to trigger list rebuild!
+                            setState(
+                              () {},
+                            ); // Apply state change dynamically to trigger list rebuild!
                             Navigator.pop(context);
                           },
                           style: ElevatedButton.styleFrom(
                             backgroundColor: AppTheme.primaryColor,
-                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(16),
+                            ),
                             padding: const EdgeInsets.symmetric(vertical: 18),
                           ),
                           child: const Text(
@@ -1509,8 +1755,10 @@ class _CommunityFeedScreenState extends State<CommunityFeedScreen> {
                     (r) => r['id'].toString() == report['id'].toString(),
                     orElse: () => report,
                   );
-                  final List<Map<String, dynamic>> replies = 
-                      List<Map<String, dynamic>>.from(currentReport['replies'] ?? []);
+                  final List<Map<String, dynamic>> replies =
+                      List<Map<String, dynamic>>.from(
+                        currentReport['replies'] ?? [],
+                      );
 
                   Future<void> sendReply() async {
                     final text = replyController.text.trim();
@@ -1519,7 +1767,8 @@ class _CommunityFeedScreenState extends State<CommunityFeedScreen> {
                     HapticFeedback.lightImpact();
 
                     final newReply = {
-                      'id': 'cpr-local-${DateTime.now().millisecondsSinceEpoch}',
+                      'id':
+                          'cpr-local-${DateTime.now().millisecondsSinceEpoch}',
                       'author_name': 'Ghana Citizen',
                       'author_initials': 'GC',
                       'content': text,
@@ -1527,11 +1776,17 @@ class _CommunityFeedScreenState extends State<CommunityFeedScreen> {
                     };
 
                     // Prepend/append locally to global state
-                    final list = List<Map<String, dynamic>>.from(communityReportsNotifier.value);
-                    final idx = list.indexWhere((r) => r['id'].toString() == report['id'].toString());
+                    final list = List<Map<String, dynamic>>.from(
+                      communityReportsNotifier.value,
+                    );
+                    final idx = list.indexWhere(
+                      (r) => r['id'].toString() == report['id'].toString(),
+                    );
                     if (idx != -1) {
                       final updated = Map<String, dynamic>.from(list[idx]);
-                      final repliesList = List<Map<String, dynamic>>.from(updated['replies'] ?? []);
+                      final repliesList = List<Map<String, dynamic>>.from(
+                        updated['replies'] ?? [],
+                      );
                       repliesList.add(newReply);
                       updated['replies'] = repliesList;
                       updated['commentsCount'] = repliesList.length;
@@ -1554,13 +1809,24 @@ class _CommunityFeedScreenState extends State<CommunityFeedScreen> {
                     });
 
                     try {
-                      final saved = await IncidentApi.instance.addReply(report['id'].toString(), text);
-                      final list = List<Map<String, dynamic>>.from(communityReportsNotifier.value);
-                      final idx = list.indexWhere((r) => r['id'].toString() == report['id'].toString());
+                      final saved = await IncidentApi.instance.addReply(
+                        report['id'].toString(),
+                        text,
+                      );
+                      final list = List<Map<String, dynamic>>.from(
+                        communityReportsNotifier.value,
+                      );
+                      final idx = list.indexWhere(
+                        (r) => r['id'].toString() == report['id'].toString(),
+                      );
                       if (idx != -1) {
                         final updated = Map<String, dynamic>.from(list[idx]);
-                        final repliesList = List<Map<String, dynamic>>.from(updated['replies'] ?? []);
-                        final rIdx = repliesList.indexWhere((r) => r['id'] == newReply['id']);
+                        final repliesList = List<Map<String, dynamic>>.from(
+                          updated['replies'] ?? [],
+                        );
+                        final rIdx = repliesList.indexWhere(
+                          (r) => r['id'] == newReply['id'],
+                        );
                         if (rIdx != -1) {
                           repliesList[rIdx] = Map<String, dynamic>.from(saved);
                           updated['replies'] = repliesList;
@@ -1578,7 +1844,10 @@ class _CommunityFeedScreenState extends State<CommunityFeedScreen> {
                     children: [
                       // Header
                       Padding(
-                        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 16,
+                          vertical: 12,
+                        ),
                         child: Row(
                           children: [
                             const Text(
@@ -1591,7 +1860,11 @@ class _CommunityFeedScreenState extends State<CommunityFeedScreen> {
                             ),
                             const Spacer(),
                             IconButton(
-                              icon: const Icon(LucideIcons.x, size: 20, color: AppTheme.textSecondary),
+                              icon: const Icon(
+                                LucideIcons.x,
+                                size: 20,
+                                color: AppTheme.textSecondary,
+                              ),
                               onPressed: () => Navigator.pop(sheetContext),
                             ),
                           ],
@@ -1611,7 +1884,9 @@ class _CommunityFeedScreenState extends State<CommunityFeedScreen> {
                               decoration: BoxDecoration(
                                 color: const Color(0xFFF9FAFB),
                                 borderRadius: BorderRadius.circular(16),
-                                border: Border.all(color: const Color(0xFFE5E7EB)),
+                                border: Border.all(
+                                  color: const Color(0xFFE5E7EB),
+                                ),
                               ),
                               child: Column(
                                 crossAxisAlignment: CrossAxisAlignment.start,
@@ -1620,7 +1895,9 @@ class _CommunityFeedScreenState extends State<CommunityFeedScreen> {
                                     children: [
                                       CircleAvatar(
                                         radius: 18,
-                                        backgroundColor: const Color(0xFFEDE9FE),
+                                        backgroundColor: const Color(
+                                          0xFFEDE9FE,
+                                        ),
                                         child: Text(
                                           currentReport['initials'],
                                           style: const TextStyle(
@@ -1633,7 +1910,8 @@ class _CommunityFeedScreenState extends State<CommunityFeedScreen> {
                                       const SizedBox(width: 10),
                                       Expanded(
                                         child: Column(
-                                          crossAxisAlignment: CrossAxisAlignment.start,
+                                          crossAxisAlignment:
+                                              CrossAxisAlignment.start,
                                           children: [
                                             Row(
                                               children: [
@@ -1645,7 +1923,8 @@ class _CommunityFeedScreenState extends State<CommunityFeedScreen> {
                                                     color: AppTheme.textPrimary,
                                                   ),
                                                 ),
-                                                if (currentReport['isVerified'] == true) ...[
+                                                if (currentReport['isVerified'] ==
+                                                    true) ...[
                                                   const SizedBox(width: 4),
                                                   const Icon(
                                                     Icons.verified,
@@ -1700,7 +1979,10 @@ class _CommunityFeedScreenState extends State<CommunityFeedScreen> {
                                 child: Center(
                                   child: Text(
                                     'No replies yet. Start the conversation!',
-                                    style: TextStyle(color: Colors.grey, fontSize: 13),
+                                    style: TextStyle(
+                                      color: Colors.grey,
+                                      fontSize: 13,
+                                    ),
                                   ),
                                 ),
                               )
@@ -1712,16 +1994,21 @@ class _CommunityFeedScreenState extends State<CommunityFeedScreen> {
                                   decoration: BoxDecoration(
                                     color: Colors.white,
                                     borderRadius: BorderRadius.circular(16),
-                                    border: Border.all(color: const Color(0xFFE5E7EB)),
+                                    border: Border.all(
+                                      color: const Color(0xFFE5E7EB),
+                                    ),
                                   ),
                                   child: Column(
-                                    crossAxisAlignment: CrossAxisAlignment.start,
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.start,
                                     children: [
                                       Row(
                                         children: [
                                           CircleAvatar(
                                             radius: 14,
-                                            backgroundColor: const Color(0xFFF3F4F6),
+                                            backgroundColor: const Color(
+                                              0xFFF3F4F6,
+                                            ),
                                             child: Text(
                                               reply['author_initials'] ?? 'GC',
                                               style: const TextStyle(
@@ -1733,7 +2020,8 @@ class _CommunityFeedScreenState extends State<CommunityFeedScreen> {
                                           ),
                                           const SizedBox(width: 8),
                                           Text(
-                                            reply['author_name'] ?? 'Ghana Citizen',
+                                            reply['author_name'] ??
+                                                'Ghana Citizen',
                                             style: const TextStyle(
                                               fontWeight: FontWeight.bold,
                                               fontSize: 13,
@@ -1762,8 +2050,12 @@ class _CommunityFeedScreenState extends State<CommunityFeedScreen> {
                       // Send reply input
                       Padding(
                         padding: EdgeInsets.only(
-                          left: 16, right: 16, top: 8,
-                          bottom: MediaQuery.of(sheetContext).viewInsets.bottom + 16,
+                          left: 16,
+                          right: 16,
+                          top: 8,
+                          bottom:
+                              MediaQuery.of(sheetContext).viewInsets.bottom +
+                              16,
                         ),
                         child: Row(
                           children: [
@@ -1773,7 +2065,9 @@ class _CommunityFeedScreenState extends State<CommunityFeedScreen> {
                                   color: const Color(0xFFF3F4F6),
                                   borderRadius: BorderRadius.circular(24),
                                 ),
-                                padding: const EdgeInsets.symmetric(horizontal: 16),
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 16,
+                                ),
                                 child: TextField(
                                   controller: replyController,
                                   style: const TextStyle(fontSize: 14),
@@ -1796,7 +2090,11 @@ class _CommunityFeedScreenState extends State<CommunityFeedScreen> {
                                   color: Color(0xFF8B5CF6),
                                   shape: BoxShape.circle,
                                 ),
-                                child: const Icon(LucideIcons.send, color: Colors.white, size: 18),
+                                child: const Icon(
+                                  LucideIcons.send,
+                                  color: Colors.white,
+                                  size: 18,
+                                ),
                               ),
                             ),
                           ],
@@ -1849,10 +2147,7 @@ class _ComposeOption extends StatelessWidget {
           children: [
             Container(
               padding: const EdgeInsets.all(12),
-              decoration: BoxDecoration(
-                color: bgColor,
-                shape: BoxShape.circle,
-              ),
+              decoration: BoxDecoration(color: bgColor, shape: BoxShape.circle),
               child: Icon(icon, color: color, size: 22),
             ),
             const SizedBox(width: 16),
@@ -1880,11 +2175,14 @@ class _ComposeOption extends StatelessWidget {
                 ],
               ),
             ),
-            const Icon(LucideIcons.chevronRight, size: 18, color: AppTheme.textSecondary),
+            const Icon(
+              LucideIcons.chevronRight,
+              size: 18,
+              color: AppTheme.textSecondary,
+            ),
           ],
         ),
       ),
     );
   }
 }
-

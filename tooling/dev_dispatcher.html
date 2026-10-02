@@ -1,0 +1,322 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>EAWS TEST Dispatcher</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      font: 16px/1.45 system-ui, sans-serif;
+      --bg: #10151c;
+      --panel: #19222d;
+      --line: #354353;
+      --text: #f4f7fb;
+      --muted: #b6c2cf;
+      --red: #ff625d;
+      --amber: #ffc857;
+      --blue: #79b8ff;
+      --green: #74d99f;
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; background: var(--bg); color: var(--text); }
+    header { position: sticky; top: 0; z-index: 2; background: #161e28; border-bottom: 1px solid var(--line); padding: 14px 20px; }
+    h1 { margin: 0; font-size: 1.2rem; letter-spacing: .02em; }
+    .banner { margin-top: 8px; padding: 8px 10px; border: 1px solid var(--amber); color: #ffe3a3; font-weight: 750; }
+    main { max-width: 1380px; margin: auto; padding: 18px; }
+    .toolbar, .filters { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+    .toolbar { margin-bottom: 12px; }
+    .filters { margin-bottom: 16px; }
+    input, select, button, textarea { font: inherit; color: var(--text); background: #202b38; border: 1px solid #526478; border-radius: 6px; padding: 9px 11px; }
+    input, select { min-height: 42px; }
+    input[type="search"] { flex: 1 1 250px; }
+    button { min-height: 42px; cursor: pointer; font-weight: 700; }
+    button:hover { border-color: white; }
+    button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible { outline: 3px solid #91c9ff; outline-offset: 2px; }
+    .danger { background: #662b2d; border-color: #ff7771; }
+    .grid { display: grid; grid-template-columns: minmax(320px, .9fr) minmax(420px, 1.35fr); gap: 16px; align-items: start; }
+    .list { display: grid; gap: 10px; max-height: calc(100vh - 250px); overflow: auto; }
+    .card, .detail { background: var(--panel); border: 1px solid var(--line); border-radius: 9px; }
+    .card { padding: 13px; cursor: pointer; }
+    .card.selected { outline: 2px solid var(--blue); }
+    .card h2 { font-size: 1rem; margin: 8px 0; }
+    .row { display: flex; justify-content: space-between; gap: 8px; align-items: center; }
+    .badge { border: 1px solid currentColor; border-radius: 999px; padding: 2px 8px; text-transform: uppercase; font-size: .76rem; font-weight: 800; }
+    .critical, .flag { color: var(--red); }
+    .high { color: var(--amber); }
+    .medium { color: var(--blue); }
+    .low { color: var(--green); }
+    .muted { color: var(--muted); }
+    .detail { min-height: 420px; padding: 18px; }
+    .detail h2 { margin: 0 0 6px; font-size: 1.35rem; }
+    .section { border-top: 1px solid var(--line); margin-top: 16px; padding-top: 12px; }
+    .actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+    .actions button { min-height: 46px; }
+    textarea { display: block; width: 100%; min-height: 74px; resize: vertical; margin: 8px 0; }
+    .comment { border-left: 4px solid var(--line); padding: 8px 10px; margin: 8px 0; background: #121922; }
+    .comment.threat { border-color: var(--red); background: #351d22; }
+    .posts { display: grid; gap: 10px; margin-top: 18px; }
+    .post { padding: 14px; background: var(--panel); border: 1px solid var(--line); border-radius: 9px; }
+    .post h2 { margin: 0 0 6px; font-size: 1rem; }
+    .history li { margin: 6px 0; }
+    .empty { padding: 28px; color: var(--muted); text-align: center; }
+    #toast { position: fixed; right: 18px; bottom: 18px; z-index: 4; background: #202b38; border: 1px solid var(--line); border-radius: 8px; padding: 12px 16px; max-width: min(520px, calc(100vw - 36px)); display: none; }
+    @media (max-width: 820px) {
+      header { position: static; }
+      .grid { grid-template-columns: 1fr; }
+      .list { max-height: 45vh; }
+      main { padding: 12px; }
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>EAWS · Local Dispatcher Test Bench</h1>
+    <div class="banner">TEST DATA ONLY · No real users, dispatch, SMS, calls, or emergency services. All actions stay in memory and disappear when this server stops.</div>
+  </header>
+  <main>
+    <div class="toolbar">
+      <strong id="connection">Connecting…</strong>
+      <span id="count" class="muted"></span>
+      <button data-load="5">Load 5</button>
+      <button data-load="50">Load 50</button>
+      <button data-load="500">Load 500</button>
+      <button id="reset" class="danger">Reset TEST shift</button>
+    </div>
+    <div class="filters">
+      <input id="search" type="search" placeholder="Search reports and comments" aria-label="Search reports and comments">
+      <select id="severity" aria-label="Filter by priority">
+        <option value="">All priorities</option><option value="critical">Critical</option><option value="high">High</option><option value="medium">Medium</option><option value="low">Low</option>
+      </select>
+      <select id="status" aria-label="Filter by status">
+        <option value="">All statuses</option><option value="new">New</option><option value="sent">Sent</option><option value="sms_unconfirmed">SMS unconfirmed</option><option value="acknowledged">Acknowledged</option><option value="assigned">Assigned</option><option value="dispatched">Dispatched</option><option value="en_route">En route</option><option value="on_scene">On scene</option><option value="escalated">Escalated</option><option value="awaiting_info">Awaiting info</option><option value="retracted">Retracted</option><option value="resolved">Resolved</option><option value="dismissed">Dismissed</option><option value="merged">Merged</option>
+      </select>
+      <select id="category" aria-label="Filter by category">
+        <option value="">All categories</option><option value="medical">Medical</option><option value="fire">Fire</option><option value="violence">Violence</option><option value="accident">Accident</option><option value="missing_person">Missing person</option><option value="natural_hazard">Natural hazard</option><option value="other">Other</option>
+      </select>
+    </div>
+    <div class="grid">
+      <section id="list" class="list" aria-label="Test incidents"></section>
+      <section id="detail" class="detail" aria-live="polite"><div class="empty">Select a TEST report to inspect its details and try dispatcher actions.</div></section>
+    </div>
+    <section class="posts" aria-label="Older community posts for threat review">
+      <h2>Older TEST community posts · review replies for threats</h2>
+      <div id="community-posts"></div>
+    </section>
+  </main>
+  <div id="toast" role="status"></div>
+  <script>
+    const api = '/api';
+    const testHeaders = { 'content-type': 'application/json', 'x-eaws-test-harness': 'true' };
+    let incidents = [];
+    let communityPosts = [];
+    let selectedId = null;
+    let refreshRunning = false;
+    let filterTimer;
+    const esc = (value) => String(value ?? '').replace(/[&<>"']/g, (char) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[char]));
+    const relativeTime = (value) => {
+      const minutes = Math.max(0, Math.floor((Date.now() - new Date(value).getTime()) / 60000));
+      if (minutes < 1) return 'just now';
+      if (minutes < 60) return `${minutes} min ago`;
+      const hours = Math.floor(minutes / 60);
+      return hours < 24 ? `${hours} hr ago` : `${Math.floor(hours / 24)} days ago`;
+    };
+    async function request(path, options = {}) {
+      const response = await fetch(`${api}${path}`, {
+        ...options,
+        headers: { ...testHeaders, ...(options.headers ?? {}) },
+      });
+      const body = response.status === 204 ? null : await response.json();
+      if (!response.ok) throw new Error(body?.error ?? `Request failed (${response.status})`);
+      return body;
+    }
+    function toast(message) {
+      const target = document.querySelector('#toast');
+      target.textContent = message;
+      target.style.display = 'block';
+      clearTimeout(toast.timer);
+      toast.timer = setTimeout(() => target.style.display = 'none', 4200);
+    }
+    function renderList() {
+      const container = document.querySelector('#list');
+      document.querySelector('#count').textContent = `${incidents.length} visible · all records prefixed TEST`;
+      if (!incidents.length) {
+        container.innerHTML = '<div class="empty">No TEST reports match these filters.</div>';
+        return;
+      }
+      container.innerHTML = incidents.map((incident) => {
+        const flagged = incident.comments.some((comment) => comment.threat_flag);
+        return `<article class="card ${selectedId === incident.id ? 'selected' : ''}" tabindex="0" role="button" data-id="${esc(incident.id)}" aria-label="${esc(incident.severity)} ${esc(incident.category)}: ${esc(incident.title)}${flagged ? ', threat comment' : ''}">
+          <div class="row"><span class="badge ${esc(incident.severity)}">${esc(incident.severity)}</span><span class="badge">${esc(incident.status.replace('_',' '))}</span></div>
+          <h2>${flagged ? '<span class="flag">⚑ THREAT COMMENT · </span>' : ''}${esc(incident.title)}</h2>
+          <div class="muted">${esc(incident.category.replace('_',' '))} · ${esc(incident.location_name || 'Location unavailable')}</div>
+          <div class="row muted"><span>${esc(incident.id)}</span><span>${relativeTime(incident.created_at)}</span></div>
+        </article>`;
+      }).join('');
+      for (const card of container.querySelectorAll('[data-id]')) {
+        card.addEventListener('click', () => selectIncident(card.dataset.id));
+        card.addEventListener('keydown', (event) => {
+          if (event.key === 'Enter' || event.key === ' ') {
+            event.preventDefault();
+            selectIncident(card.dataset.id);
+          }
+        });
+      }
+    }
+    function renderCommunityPosts() {
+      const container = document.querySelector('#community-posts');
+      container.innerHTML = communityPosts.map((post) => {
+        const replies = post.replies ?? [];
+        const flagged = replies.some((reply) => reply.threat_flag);
+        return `<article class="post">
+          <div class="row"><strong>${flagged ? '<span class="flag">⚑ THREAT IN REPLY · </span>' : ''}${esc(post.author_name)}</strong><span class="muted">${relativeTime(post.created_at)}</span></div>
+          <p>${esc(post.content)}</p>
+          ${replies.length ? replies.map((reply) => `<div class="comment ${reply.threat_flag ? 'threat' : ''}"><strong>${reply.threat_flag ? '⚑ TEST THREAT FLAG · ' : ''}${esc(reply.author_name)}</strong> · ${relativeTime(reply.created_at)}<br>${esc(reply.content)}</div>`).join('') : '<p class="muted">No replies.</p>'}
+        </article>`;
+      }).join('') || '<div class="empty">No older TEST posts.</div>';
+    }
+    function renderDetail(incident) {
+      const threatComments = incident.comments.filter((comment) => comment.threat_flag);
+      const location = incident.latitude != null && incident.longitude != null
+        ? `<a target="_blank" rel="noreferrer" href="https://maps.google.com/?q=${encodeURIComponent(incident.latitude)},${encodeURIComponent(incident.longitude)}">Open TEST coordinates in map</a>`
+        : 'No coordinates provided';
+      const media = incident.media_url
+        ? `<a target="_blank" rel="noreferrer" href="${esc(incident.media_url)}">TEST ${esc(incident.media_type || 'media')} attachment</a>`
+        : incident.media_status === 'test_placeholder_only'
+          ? `TEST ${esc(incident.media_type || 'media')} placeholder · no bytes uploaded`
+          : 'No media attached';
+      document.querySelector('#detail').innerHTML = `
+        <div class="row"><span class="badge ${esc(incident.severity)}">${esc(incident.severity)} · ${esc(incident.category)}</span><span class="muted">${relativeTime(incident.created_at)}</span></div>
+        <h2>${esc(incident.title)}</h2><div class="muted">${esc(incident.id)} · version ${incident.version}</div>
+        <p>${esc(incident.description || 'No description provided (media-only edge case).')}</p>
+        <div class="section"><strong>Reporter:</strong> ${esc(incident.user_name)} (${esc(incident.user_id)})<br><strong>Location:</strong> ${esc(incident.location_name || 'Not provided')} · ${location}<br><strong>Media:</strong> ${media}</div>
+        <div class="section"><strong>Status:</strong> ${esc(incident.status)} · <strong>Owner:</strong> ${esc(incident.assigned_to || 'Unassigned')}
+          ${incident.citizen_safe ? '<p class="threat">TEST: Citizen reported safe · operator closure still required</p>' : ''}
+          <div class="actions"><button data-action="acknowledged">Acknowledge</button><button data-action="assign">Assign TEST operator</button><button data-action="dispatched">Dispatch TEST unit</button><button data-action="en_route">Unit en route</button><button data-action="on_scene">Unit on scene</button><button data-action="escalated">Escalate</button><button data-action="awaiting_info">Request info</button><button data-action="resolved">Resolve</button><button data-action="dismissed">Dismiss false alarm</button><button data-action="merge">Merge into TEST-INC-0004</button></div>
+        </div>
+        <div class="section"><strong>Internal note</strong><textarea id="note" maxlength="1000" placeholder="TEST internal note (not sent to reporter)"></textarea><button id="add-note">Add internal note</button>
+          ${(incident.notes || []).map((note) => `<div class="comment"><strong>${esc(note.actor)}</strong> · ${relativeTime(note.created_at)}<br>${esc(note.content)}</div>`).join('')}
+        </div>
+        <div class="section"><strong>Send TEST message to reporter</strong><textarea id="message" maxlength="1000" placeholder="Test-only message; not delivered to any device"></textarea><button id="send-message">Queue TEST message</button><p class="muted">Harness delivery state is explicitly test_only_not_delivered.</p>
+          ${(incident.messages || []).map((message) => `<div class="comment"><strong>${esc(message.sender)}</strong> · ${relativeTime(message.created_at)} · ${esc(message.delivery_state)}<br>${esc(message.content)}</div>`).join('')}
+        </div>
+        <div class="section"><strong>Comments</strong>${incident.comments.length ? incident.comments.map((comment) => `<div class="comment ${comment.threat_flag ? 'threat' : ''}"><strong>${comment.threat_flag ? '⚑ TEST THREAT FLAG · ' : ''}${esc(comment.author_name)}</strong> · ${relativeTime(comment.created_at)}<br>${esc(comment.content)}</div>`).join('') : '<p class="muted">No comments.</p>'}</div>
+        <div class="section"><strong>History</strong><ul class="history">${incident.history.slice().reverse().map((item) => `<li>${esc(item.action)} · ${esc(item.actor)} · ${relativeTime(item.created_at)}</li>`).join('')}</ul></div>`;
+      for (const button of document.querySelectorAll('[data-action]')) {
+        button.addEventListener('click', () => dispatchAction(button.dataset.action));
+      }
+      document.querySelector('#add-note').addEventListener('click', addNote);
+      document.querySelector('#send-message').addEventListener('click', sendTestMessage);
+    }
+    function selectIncident(id) {
+      selectedId = id;
+      renderList();
+      const incident = incidents.find((item) => item.id === id);
+      if (incident) renderDetail(incident);
+    }
+    async function dispatchAction(action) {
+      const incident = incidents.find((item) => item.id === selectedId);
+      if (!incident) return;
+      try {
+        let patch;
+        if (action === 'assign') {
+          patch = { assigned_to: 'TEST Operator Akua Sarpong', operator_name: 'TEST Operator Akua Sarpong', status: 'assigned', action: 'assigned to TEST Operator Akua Sarpong' };
+        } else if (action === 'merge') {
+          patch = { status: 'merged', merged_into: 'TEST-INC-0004', action: 'merged into TEST-INC-0004' };
+        } else if (action === 'dispatched') {
+          patch = { status: action, operator_name: 'TEST Operator Akua Sarpong', dispatch_unit: 'TEST Unit Alpha', eta_minutes: 8, action: 'TEST Unit Alpha dispatched' };
+        } else if (action === 'resolved') {
+          const outcome = prompt('TEST closure outcome (required):');
+          if (!outcome?.trim()) return toast('Closure cancelled: outcome is required.');
+          const resolution_notes = prompt('TEST resolution notes (required):');
+          if (!resolution_notes?.trim()) return toast('Closure cancelled: notes are required.');
+          patch = { status: action, outcome: outcome.trim(), resolution_notes: resolution_notes.trim(), operator_name: 'TEST Operator Akua Sarpong', action: 'resolved with TEST outcome and notes' };
+        } else {
+          patch = { status: action, action, ...(action === 'acknowledged' ? { acknowledged_at: new Date().toISOString(), operator_name: 'TEST Operator Akua Sarpong' } : {}) };
+        }
+        patch.expected_version = incident.version;
+        await request(`/incidents/${encodeURIComponent(incident.id)}`, { method: 'PATCH', body: JSON.stringify(patch) });
+        toast(`TEST action applied: ${patch.action}`);
+        await loadIncidents();
+      } catch (error) {
+        toast(`Action failed: ${error.message}`);
+        await loadIncidents();
+      }
+    }
+    async function addNote() {
+      const content = document.querySelector('#note').value.trim();
+      if (!content) return toast('Enter a TEST note first.');
+      try {
+        await request(`/incidents/${encodeURIComponent(selectedId)}/notes`, { method: 'POST', body: JSON.stringify({ content }) });
+        toast('TEST internal note saved.');
+        await loadIncidents();
+      } catch (error) { toast(`Note failed: ${error.message}`); }
+    }
+    async function sendTestMessage() {
+      const content = document.querySelector('#message').value.trim();
+      if (!content) return toast('Enter a TEST message first.');
+      try {
+        await request(`/incidents/${encodeURIComponent(selectedId)}/messages`, { method: 'POST', body: JSON.stringify({ content }) });
+        toast('TEST message recorded only; it was not delivered.');
+        await loadIncidents();
+      } catch (error) { toast(`Message failed: ${error.message}`); }
+    }
+    async function loadIncidents() {
+      if (refreshRunning) return;
+      refreshRunning = true;
+      try {
+        const query = new URLSearchParams();
+        for (const key of ['search','severity','status','category']) {
+          const value = document.querySelector(`#${key}`).value;
+          if (value) query.set(key, value);
+        }
+        const [feed, posts] = await Promise.all([
+          request(`/incidents/feed?${query}`),
+          request('/community/posts'),
+        ]);
+        incidents = feed.incidents;
+        communityPosts = posts.posts;
+        document.querySelector('#connection').textContent = 'TEST API · connected';
+        renderList();
+        renderCommunityPosts();
+        if (selectedId && incidents.some((item) => item.id === selectedId)) {
+          renderDetail(incidents.find((item) => item.id === selectedId));
+        } else if (selectedId) {
+          selectedId = null;
+          document.querySelector('#detail').innerHTML = '<div class="empty">Selected TEST report is hidden by the current filters.</div>';
+        }
+      } catch (error) {
+        document.querySelector('#connection').textContent = `API disconnected · ${error.message}`;
+      } finally { refreshRunning = false; }
+    }
+    for (const key of ['search','severity','status','category']) {
+      document.querySelector(`#${key}`).addEventListener('input', () => {
+        clearTimeout(filterTimer);
+        filterTimer = setTimeout(loadIncidents, 180);
+      });
+      document.querySelector(`#${key}`).addEventListener('change', loadIncidents);
+    }
+    for (const button of document.querySelectorAll('[data-load]')) {
+      button.addEventListener('click', async () => {
+        try {
+          await request('/dev/load', { method: 'POST', body: JSON.stringify({ count: Number(button.dataset.load) }) });
+          selectedId = null;
+          await loadIncidents();
+          toast(`Loaded ${button.dataset.load} synthetic TEST records.`);
+        } catch (error) { toast(`Load failed: ${error.message}`); }
+      });
+    }
+    document.querySelector('#reset').addEventListener('click', async () => {
+      try {
+        await request('/dev/reset', { method: 'POST' });
+        selectedId = null;
+        document.querySelector('#detail').innerHTML = '<div class="empty">Select a TEST report to inspect its details and try dispatcher actions.</div>';
+        await loadIncidents();
+        toast('Reset synthetic TEST shift.');
+      } catch (error) { toast(`Reset failed: ${error.message}`); }
+    });
+    loadIncidents();
+    setInterval(loadIncidents, 2500);
+  </script>
+</body>
+</html>

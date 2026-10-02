@@ -22,7 +22,7 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
   late TextEditingController _bloodController;
   late TextEditingController _conditionsController;
   late TextEditingController _addressController;
-  
+
   // Recommended premium emergency controllers
   late TextEditingController _allergiesController;
   late TextEditingController _medicationsController;
@@ -41,13 +41,19 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
     _phoneController = TextEditingController(text: ProfileData.phone);
     _dobController = TextEditingController(text: ProfileData.dob);
     _bloodController = TextEditingController(text: ProfileData.bloodType);
-    _conditionsController = TextEditingController(text: ProfileData.medicalConditions);
+    _conditionsController = TextEditingController(
+      text: ProfileData.medicalConditions,
+    );
     _addressController = TextEditingController(text: ProfileData.homeAddress);
-    
+
     // Initialize recommended emergency controllers
     _allergiesController = TextEditingController(text: ProfileData.allergies);
-    _medicationsController = TextEditingController(text: ProfileData.medications);
-    _commPreferenceController = TextEditingController(text: ProfileData.communicationPreference);
+    _medicationsController = TextEditingController(
+      text: ProfileData.medications,
+    );
+    _commPreferenceController = TextEditingController(
+      text: ProfileData.communicationPreference,
+    );
   }
 
   @override
@@ -59,7 +65,7 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
     _bloodController.dispose();
     _conditionsController.dispose();
     _addressController.dispose();
-    
+
     // Dispose recommended emergency controllers
     _allergiesController.dispose();
     _medicationsController.dispose();
@@ -85,13 +91,13 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
     ProfileData.bloodType = _bloodController.text.trim();
     ProfileData.medicalConditions = _conditionsController.text.trim();
     ProfileData.homeAddress = _addressController.text.trim();
-    
+
     // Save recommended emergency values
     ProfileData.allergies = _allergiesController.text.trim();
     ProfileData.medications = _medicationsController.text.trim();
     ProfileData.communicationPreference = _commPreferenceController.text.trim();
 
-    // Persist to Supabase dynamically
+    // Persist the profile through the configured authentication provider.
     final success = await ProfileData.saveToSession();
 
     if (mounted) {
@@ -101,8 +107,11 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
 
       if (success) {
         HapticFeedback.mediumImpact();
-        Navigator.pop(context, true); // Return true to trigger state refresh on parent
-        
+        Navigator.pop(
+          context,
+          true,
+        ); // Return true to trigger state refresh on parent
+
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Row(
@@ -172,7 +181,10 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
                             decoration: BoxDecoration(
                               color: Colors.white,
                               borderRadius: BorderRadius.circular(20),
-                              border: Border.all(color: const Color(0xFFE5E7EB), width: 1.5),
+                              border: Border.all(
+                                color: const Color(0xFFE5E7EB),
+                                width: 1.5,
+                              ),
                             ),
                             child: Column(
                               children: [
@@ -180,7 +192,9 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
                                   icon: LucideIcons.user,
                                   label: 'Full Name',
                                   controller: _nameController,
-                                  validator: (val) => val == null || val.isEmpty ? 'Name cannot be empty' : null,
+                                  validator: (val) => val == null || val.isEmpty
+                                      ? 'Name cannot be empty'
+                                      : null,
                                 ),
                                 const Divider(height: 1),
                                 _buildInputTile(
@@ -189,8 +203,10 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
                                   controller: _emailController,
                                   keyboardType: TextInputType.emailAddress,
                                   validator: (val) {
-                                    if (val == null || val.isEmpty) return 'Email cannot be empty';
-                                    if (!val.contains('@')) return 'Enter a valid email';
+                                    if (val == null || val.isEmpty)
+                                      return 'Email cannot be empty';
+                                    if (!val.contains('@'))
+                                      return 'Enter a valid email';
                                     return null;
                                   },
                                 ),
@@ -200,7 +216,9 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
                                   label: 'Phone Number',
                                   controller: _phoneController,
                                   keyboardType: TextInputType.phone,
-                                  validator: (val) => val == null || val.isEmpty ? 'Phone cannot be empty' : null,
+                                  validator: (val) => val == null || val.isEmpty
+                                      ? 'Phone cannot be empty'
+                                      : null,
                                 ),
                                 const Divider(height: 1),
                                 _buildInputTile(
@@ -228,7 +246,10 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
                             decoration: BoxDecoration(
                               color: Colors.white,
                               borderRadius: BorderRadius.circular(20),
-                              border: Border.all(color: const Color(0xFFE5E7EB), width: 1.5),
+                              border: Border.all(
+                                color: const Color(0xFFE5E7EB),
+                                width: 1.5,
+                              ),
                             ),
                             child: Column(
                               children: [
@@ -287,8 +308,12 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
                               label: const Text('Save Changes'),
                               style: ElevatedButton.styleFrom(
                                 backgroundColor: AppTheme.primaryColor,
-                                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-                                padding: const EdgeInsets.symmetric(vertical: 18),
+                                shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(16),
+                                ),
+                                padding: const EdgeInsets.symmetric(
+                                  vertical: 18,
+                                ),
                                 elevation: 2,
                               ),
                             ),
@@ -341,7 +366,10 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
                       mainAxisAlignment: MainAxisAlignment.spaceBetween,
                       children: [
                         IconButton(
-                          icon: const Icon(Icons.arrow_back, color: Colors.white),
+                          icon: const Icon(
+                            Icons.arrow_back,
+                            color: Colors.white,
+                          ),
                           onPressed: () {
                             HapticFeedback.lightImpact();
                             Navigator.pop(context);
@@ -407,7 +435,9 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
                               HapticFeedback.mediumImpact();
                               ScaffoldMessenger.of(context).showSnackBar(
                                 const SnackBar(
-                                  content: Text('Triggering photo gallery access...'),
+                                  content: Text(
+                                    'Triggering photo gallery access...',
+                                  ),
                                   backgroundColor: AppTheme.primaryColor,
                                 ),
                               );
@@ -417,7 +447,10 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
                               decoration: BoxDecoration(
                                 color: AppTheme.primaryColor,
                                 shape: BoxShape.circle,
-                                border: Border.all(color: Colors.white, width: 2),
+                                border: Border.all(
+                                  color: Colors.white,
+                                  width: 2,
+                                ),
                               ),
                               child: const Icon(
                                 LucideIcons.camera,

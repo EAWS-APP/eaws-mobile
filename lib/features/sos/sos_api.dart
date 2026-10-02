@@ -1,4 +1,6 @@
-import 'package:supabase_flutter/supabase_flutter.dart';
+import '../../core/api_client.dart';
+
+const _citizenTestHeaders = {'x-eaws-test-client': 'citizen'};
 
 class SosApi {
   SosApi._();
@@ -6,14 +8,16 @@ class SosApi {
   static final SosApi instance = SosApi._();
 
   Future<Map<String, dynamic>> createSos({
-    required double latitude,
-    required double longitude,
-    required double accuracy,
-    required String locationName,
+    required String clientEventId,
+    double? latitude,
+    double? longitude,
+    double? accuracy,
+    String? locationName,
   }) async {
-    try {
-      final user = Supabase.instance.client.auth.currentUser;
-      final data = await Supabase.instance.client.from('incidents').insert({
+    final response = await EawsApiClient.instance.postWithIdempotencyKey(
+      '/incidents',
+      idempotencyKey: clientEventId,
+      body: {
         'emergency_type': 'SOS',
         'category': 'SOS',
         'title': 'Emergency SOS',
@@ -24,31 +28,89 @@ class SosApi {
         'latitude': latitude,
         'longitude': longitude,
         'accuracy_meters': accuracy,
-        'user_id': user?.id,
-        'status': 'active',
-      }).select().single();
-      return data;
-    } catch (e) {
-      print('Failed to write SOS to Supabase (table might not exist): $e');
-      // Return a mock payload so the UI proceeds to "Dispatched" state instead of hanging
-      return {
-        'id': 'mock-incident-${DateTime.now().millisecondsSinceEpoch}',
-        'status': 'active'
-      };
+        'status': 'sent',
+        'occurred_at': DateTime.now().toUtc().toIso8601String(),
+      },
+    );
+    final incident = response is Map ? response['incident'] ?? response : null;
+    if (incident is! Map) {
+      throw const FormatException('SOS response did not include an incident.');
     }
+    return Map<String, dynamic>.from(incident);
   }
 
   Future<void> cancelSos(String incidentId) async {
-    try {
-      if (!incidentId.startsWith('mock-')) {
-        await Supabase.instance.client
-            .from('incidents')
-            .update({'status': 'resolved'})
-            .eq('id', incidentId);
-      }
-    } catch (e) {
-      print('Failed to cancel SOS in Supabase: $e');
+    await EawsApiClient.instance.patch(
+      '/incidents/${Uri.encodeComponent(incidentId)}',
+      body: {'status': 'retracted', 'action': 'retracted by user'},
+    );
+  }
+
+  Future<void> reportSafe(String incidentId) async {
+    await EawsApiClient.instance.patch(
+      '/incidents/${Uri.encodeComponent(incidentId)}',
+      body: {
+        'citizen_safe': true,
+        'action': 'citizen reported safe; operator closure required',
+      },
+    );
+  }
+
+  Future<Map<String, dynamic>> getSos(String incidentId) async {
+    final response = await EawsApiClient.instance.get(
+      '/incidents/${Uri.encodeComponent(incidentId)}',
+    );
+    final incident = response is Map ? response['incident'] ?? response : null;
+    if (incident is! Map) {
+      throw const FormatException('SOS response did not include an incident.');
     }
+    return Map<String, dynamic>.from(incident);
+  }
+
+  Future<List<Map<String, dynamic>>> getMessages(String incidentId) async {
+    final response = await EawsApiClient.instance.get(
+      '/incidents/${Uri.encodeComponent(incidentId)}/messages',
+      headers: _citizenTestHeaders,
+    );
+    final messages = response is Map ? response['messages'] : null;
+    if (messages is! List) {
+      throw const FormatException('Message response was invalid.');
+    }
+    return messages
+        .map((message) => Map<String, dynamic>.from(message as Map))
+        .toList();
+  }
+
+  Future<Map<String, dynamic>> sendMessage({
+    required String incidentId,
+    required String content,
+    required String clientMessageId,
+  }) async {
+    final response = await EawsApiClient.instance.post(
+      '/incidents/${Uri.encodeComponent(incidentId)}/messages',
+      headers: _citizenTestHeaders,
+      body: {'content': content, 'client_message_id': clientMessageId},
+    );
+    final message = response is Map ? response['message'] : null;
+    if (message is! Map) {
+      throw const FormatException(
+        'Message response did not include a message.',
+      );
+    }
+    return Map<String, dynamic>.from(message);
+  }
+
+  Future<List<Map<String, dynamic>>> getMessageThreads() async {
+    final response = await EawsApiClient.instance.get(
+      '/citizen/messages/threads',
+      headers: _citizenTestHeaders,
+    );
+    final threads = response is Map ? response['threads'] : null;
+    if (threads is! List) {
+      throw const FormatException('Message thread response was invalid.');
+    }
+    return threads
+        .map((thread) => Map<String, dynamic>.from(thread as Map))
+        .toList();
   }
 }
-

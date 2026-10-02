@@ -4,6 +4,7 @@ import 'package:lucide_icons/lucide_icons.dart';
 import 'package:geolocator/geolocator.dart';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:math';
 import 'package:image_picker/image_picker.dart';
 import 'package:device_info_plus/device_info_plus.dart';
 import '../../core/theme.dart';
@@ -24,6 +25,7 @@ class _ReportIncidentScreenState extends State<ReportIncidentScreen> {
   final TextEditingController _descriptionController = TextEditingController();
   int _charCount = 0;
   bool _isAnonymous = false;
+  bool _isSubmitting = false;
 
   // Media capture variables
   File? _selectedMediaFile;
@@ -32,10 +34,18 @@ class _ReportIncidentScreenState extends State<ReportIncidentScreen> {
   final ImagePicker _picker = ImagePicker();
 
   // Location details
-  double _latitude = 5.6037;
-  double _longitude = -0.1870;
-  String _locationName = 'Accra, Ghana';
+  double? _latitude;
+  double? _longitude;
+  String _locationName = 'Location not shared';
   bool _isLoadingLocation = false;
+  late final String _clientEventId = _newClientEventId();
+  String? _createdIncidentId;
+  bool _mediaUploadFailed = false;
+
+  String _newClientEventId() {
+    final randomPart = Random.secure().nextInt(0x7fffffff).toRadixString(16);
+    return 'REPORT-${DateTime.now().toUtc().microsecondsSinceEpoch}-$randomPart';
+  }
 
   @override
   void initState() {
@@ -81,7 +91,10 @@ class _ReportIncidentScreenState extends State<ReportIncidentScreen> {
               Expanded(
                 child: Text(
                   'Running on simulator. Loading high-quality emergency mock ${isImage ? "photo" : "video"} for testing...',
-                  style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold),
+                  style: const TextStyle(
+                    fontSize: 12,
+                    fontWeight: FontWeight.bold,
+                  ),
                 ),
               ),
             ],
@@ -90,9 +103,11 @@ class _ReportIncidentScreenState extends State<ReportIncidentScreen> {
           duration: const Duration(seconds: 4),
         ),
       );
-      
+
       setState(() {
-        _selectedMediaFile = File(isImage ? 'mock_photo.jpg' : 'mock_video.mp4');
+        _selectedMediaFile = File(
+          isImage ? 'mock_photo.jpg' : 'mock_video.mp4',
+        );
         _isImage = isImage;
       });
       // Auto-pinpoint location at the exact moment mock evidence is loaded
@@ -132,7 +147,9 @@ class _ReportIncidentScreenState extends State<ReportIncidentScreen> {
       print('EAWS Camera Capture Error: $e');
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text('Failed to open camera: $e. Make sure camera access is allowed.'),
+          content: Text(
+            'Failed to open camera: $e. Make sure camera access is allowed.',
+          ),
           backgroundColor: AppTheme.errorColor,
         ),
       );
@@ -144,34 +161,32 @@ class _ReportIncidentScreenState extends State<ReportIncidentScreen> {
     Widget mediaWidget;
 
     if (isMock) {
-      final mockUrl = _selectedIncidentType == 'Fire'
-          ? 'https://images.unsplash.com/photo-1508873699372-7aeab60b44ab?auto=format&fit=crop&q=80&w=800'
-          : (_selectedIncidentType == 'Medical'
-              ? 'https://images.unsplash.com/photo-1584515979956-d9f6e5d09982?auto=format&fit=crop&q=80&w=800'
-              : 'https://images.unsplash.com/photo-1547683905-f686c993aae5?auto=format&fit=crop&q=80&w=800');
-      
       mediaWidget = Container(
         height: 180,
         width: double.infinity,
         decoration: BoxDecoration(
           borderRadius: BorderRadius.circular(16),
-          image: DecorationImage(
-            image: NetworkImage(mockUrl),
-            fit: BoxFit.cover,
-          ),
+          color: const Color(0xFFF1F5F9),
+          border: Border.all(color: const Color(0xFFCBD5E1)),
         ),
-        child: !_isImage
-            ? Center(
-                child: Container(
-                  padding: const EdgeInsets.all(12),
-                  decoration: BoxDecoration(
-                    color: Colors.black.withOpacity(0.5),
-                    shape: BoxShape.circle,
-                  ),
-                  child: const Icon(LucideIcons.play, color: Colors.white, size: 32),
-                ),
-              )
-            : null,
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(
+              _isImage ? LucideIcons.image : LucideIcons.video,
+              color: AppTheme.textSecondary,
+              size: 40,
+            ),
+            const SizedBox(height: 8),
+            const Text(
+              'TEST PLACEHOLDER · no media bytes',
+              style: TextStyle(
+                color: AppTheme.textSecondary,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+          ],
+        ),
       );
     } else {
       mediaWidget = Container(
@@ -183,10 +198,7 @@ class _ReportIncidentScreenState extends State<ReportIncidentScreen> {
         ),
         clipBehavior: Clip.antiAlias,
         child: _isImage
-            ? Image.file(
-                _selectedMediaFile!,
-                fit: BoxFit.cover,
-              )
+            ? Image.file(_selectedMediaFile!, fit: BoxFit.cover)
             : Stack(
                 fit: StackFit.expand,
                 children: [
@@ -195,11 +207,19 @@ class _ReportIncidentScreenState extends State<ReportIncidentScreen> {
                     child: Column(
                       mainAxisAlignment: MainAxisAlignment.center,
                       children: const [
-                        Icon(LucideIcons.video, color: AppTheme.primaryColor, size: 48),
+                        Icon(
+                          LucideIcons.video,
+                          color: AppTheme.primaryColor,
+                          size: 48,
+                        ),
                         SizedBox(height: 8),
                         Text(
                           'Video Evidence Captured Successfully',
-                          style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13, color: AppTheme.textPrimary),
+                          style: TextStyle(
+                            fontWeight: FontWeight.bold,
+                            fontSize: 13,
+                            color: AppTheme.textPrimary,
+                          ),
                         ),
                       ],
                     ),
@@ -211,7 +231,11 @@ class _ReportIncidentScreenState extends State<ReportIncidentScreen> {
                         color: Colors.black.withOpacity(0.5),
                         shape: BoxShape.circle,
                       ),
-                      child: const Icon(LucideIcons.play, color: Colors.white, size: 32),
+                      child: const Icon(
+                        LucideIcons.play,
+                        color: Colors.white,
+                        size: 32,
+                      ),
                     ),
                   ),
                 ],
@@ -243,7 +267,11 @@ class _ReportIncidentScreenState extends State<ReportIncidentScreen> {
                   color: AppTheme.primaryColor,
                   shape: BoxShape.circle,
                   boxShadow: [
-                    BoxShadow(color: Colors.black26, blurRadius: 4, offset: Offset(0, 2)),
+                    BoxShadow(
+                      color: Colors.black26,
+                      blurRadius: 4,
+                      offset: Offset(0, 2),
+                    ),
                   ],
                 ),
                 child: const Icon(Icons.close, color: Colors.white, size: 18),
@@ -307,7 +335,9 @@ class _ReportIncidentScreenState extends State<ReportIncidentScreen> {
       if (permission == LocationPermission.deniedForever) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: const Text('Location permissions are permanently denied. Please enable them in your device settings.'),
+            content: const Text(
+              'Location permissions are permanently denied. Please enable them in your device settings.',
+            ),
             action: SnackBarAction(
               label: 'Settings',
               textColor: Colors.white,
@@ -319,7 +349,8 @@ class _ReportIncidentScreenState extends State<ReportIncidentScreen> {
         return;
       }
 
-      if (permission == LocationPermission.whileInUse || permission == LocationPermission.always) {
+      if (permission == LocationPermission.whileInUse ||
+          permission == LocationPermission.always) {
         final Position position = await Geolocator.getCurrentPosition(
           desiredAccuracy: LocationAccuracy.high,
           timeLimit: const Duration(seconds: 4),
@@ -327,21 +358,36 @@ class _ReportIncidentScreenState extends State<ReportIncidentScreen> {
         setState(() {
           _latitude = position.latitude;
           _longitude = position.longitude;
+          _locationName = 'Coordinates shared';
         });
 
         // Query OSM dynamic Nominatim geocoding to resolve address name
         final client = HttpClient();
-        final url = Uri.parse('https://nominatim.openstreetmap.org/reverse?format=json&lat=${position.latitude}&lon=${position.longitude}&zoom=18&addressdetails=1');
+        final url = Uri.parse(
+          'https://nominatim.openstreetmap.org/reverse?format=json&lat=${position.latitude}&lon=${position.longitude}&zoom=18&addressdetails=1',
+        );
         final request = await client.getUrl(url);
-        request.headers.set('User-Agent', 'EAWSMobileApp/1.0 (masters@eaws.org)');
+        request.headers.set(
+          'User-Agent',
+          'EAWSMobileApp/1.0 (masters@eaws.org)',
+        );
         final response = await request.close();
         final responseBody = await response.transform(utf8.decoder).join();
         final data = json.decode(responseBody);
         if (data != null && data['address'] != null) {
           final addr = data['address'];
-          final poi = addr['amenity'] ?? addr['building'] ?? addr['shop'] ?? addr['office'] ?? '';
+          final poi =
+              addr['amenity'] ??
+              addr['building'] ??
+              addr['shop'] ??
+              addr['office'] ??
+              '';
           final road = addr['road'] ?? addr['street'] ?? addr['highway'] ?? '';
-          final suburb = addr['suburb'] ?? addr['neighbourhood'] ?? addr['city_district'] ?? '';
+          final suburb =
+              addr['suburb'] ??
+              addr['neighbourhood'] ??
+              addr['city_district'] ??
+              '';
           final city = addr['city'] ?? addr['town'] ?? addr['village'] ?? '';
           final country = addr['country'] ?? '';
 
@@ -350,7 +396,7 @@ class _ReportIncidentScreenState extends State<ReportIncidentScreen> {
           if (road.isNotEmpty) parts.add(road);
           if (suburb.isNotEmpty) parts.add(suburb);
           if (city.isNotEmpty && parts.length < 3) parts.add(city);
-          
+
           if (parts.isEmpty && country.isNotEmpty) {
             parts.add(country);
           }
@@ -372,11 +418,18 @@ class _ReportIncidentScreenState extends State<ReportIncidentScreen> {
   }
 
   Future<void> _handleSubmitReport() async {
+    if (_isSubmitting) return;
+
+    if (_createdIncidentId != null && _mediaUploadFailed) {
+      await _retryMediaUpload();
+      return;
+    }
+
     final String desc = _descriptionController.text.trim();
-    if (desc.isEmpty) {
+    if (desc.isEmpty && _selectedMediaFile == null) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
-          content: Text('Please describe what you are seeing before submitting.'),
+          content: Text('Add a short description or attach a photo or video.'),
           backgroundColor: AppTheme.errorColor,
         ),
       );
@@ -384,12 +437,8 @@ class _ReportIncidentScreenState extends State<ReportIncidentScreen> {
     }
 
     // Determine category values
-    Color catColor = const Color(0xFFEF4444);
     String catLabel = _selectedIncidentType.toUpperCase();
-    if (_selectedIncidentType == 'Fire') catColor = const Color(0xFFF59E0B);
-    if (_selectedIncidentType == 'Medical') catColor = const Color(0xFF3B82F6);
-    if (_selectedIncidentType == 'Suspicious') catColor = const Color(0xFF10B981);
-    
+
     if (_selectedIncidentType == 'Other') {
       final custom = _customTypeController.text.trim();
       if (custom.isEmpty) {
@@ -402,30 +451,24 @@ class _ReportIncidentScreenState extends State<ReportIncidentScreen> {
         return;
       }
       catLabel = custom.toUpperCase();
-      catColor = const Color(0xFF10B981); // Neutral/custom color
     }
 
     final String? mediaPath = _selectedMediaFile?.path;
-    String? finalImageAsset;
     bool isVideoReport = false;
-    
+    final isTestPlaceholder =
+        mediaPath != null && mediaPath.startsWith('mock_');
+
     if (mediaPath != null) {
       if (mediaPath.startsWith('mock_')) {
-        finalImageAsset = _selectedIncidentType == 'Fire'
-            ? 'https://images.unsplash.com/photo-1508873699372-7aeab60b44ab?auto=format&fit=crop&q=80&w=800'
-            : (_selectedIncidentType == 'Medical'
-                ? 'https://images.unsplash.com/photo-1584515979956-d9f6e5d09982?auto=format&fit=crop&q=80&w=800'
-                : 'https://images.unsplash.com/photo-1547683905-f686c993aae5?auto=format&fit=crop&q=80&w=800');
         isVideoReport = !_isImage;
       } else {
-        finalImageAsset = mediaPath;
         isVideoReport = !_isImage;
       }
     }
 
-    final title = '$_selectedIncidentType incident reported near $_locationName';
-    Map<String, dynamic> newReport;
-
+    final title =
+        '$_selectedIncidentType incident reported near $_locationName';
+    setState(() => _isSubmitting = true);
     try {
       final remoteIncident = await IncidentApi.instance.createIncident(
         category: catLabel,
@@ -433,67 +476,120 @@ class _ReportIncidentScreenState extends State<ReportIncidentScreen> {
         description: desc,
         isAnonymous: _isAnonymous,
         locationName: _locationName,
+        clientEventId: _clientEventId,
         latitude: _latitude,
         longitude: _longitude,
-        mediaUrl: finalImageAsset != null && finalImageAsset.startsWith('http') ? finalImageAsset : null,
-        mediaType: finalImageAsset == null ? null : (isVideoReport ? 'video' : 'image'),
+        mediaType: mediaPath == null
+            ? null
+            : (isVideoReport ? 'video' : 'image'),
+        testPlaceholderMedia: isTestPlaceholder,
       );
-      newReport = remoteIncident.toUiMap();
-    } catch (e) {
-      print('EAWS Incident API submit failed, using local fallback: $e');
-      // Build the dynamic new card model while the backend route is still coming online.
-      newReport = {
-        'id': DateTime.now().millisecondsSinceEpoch,
-        'userId': 'user_12345',
-        'userName': _isAnonymous ? 'Anonymous Citizen' : 'Ghana Citizen',
-        'initials': _isAnonymous ? 'AC' : 'GC',
-        'avatarColor': _isAnonymous ? Colors.grey : AppTheme.primaryColor,
-        'isVerified': !_isAnonymous,
-        'timeAgo': 'Just now',
-        'category': catLabel,
-        'categoryColor': catColor,
-        'title': title,
-        'description': desc,
-        'imageAsset': finalImageAsset,
-        'isVideo': isVideoReport,
-        'severity': 'PENDING TRIAGE',
-        'status': 'ACTIVE',
-        'location': _locationName,
-        'latitude': _latitude,
-        'longitude': _longitude,
-        'likes': 0,
-        'commentsCount': 0,
-        'comments': <Map<String, dynamic>>[],
-        'isLiked': false,
-      };
-    }
+      _createdIncidentId = remoteIncident.id;
+      final newReport = remoteIncident.toUiMap();
+      final currentReports = List<Map<String, dynamic>>.from(
+        communityReportsNotifier.value,
+      )..insert(0, newReport);
+      communityReportsNotifier.value = currentReports;
 
-    // Prepend to dynamic list
-    final List<Map<String, dynamic>> currentReports = List.from(communityReportsNotifier.value);
-    currentReports.insert(0, newReport);
-    communityReportsNotifier.value = currentReports;
-
-    HapticFeedback.mediumImpact();
-    Navigator.pop(context); // Close incident report screen
-
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Row(
-          children: const [
-            Icon(Icons.check_circle, color: Colors.white),
-            SizedBox(width: 12),
-            Expanded(
-              child: Text(
-                'Incident Report Submitted Successfully!',
-                style: TextStyle(fontWeight: FontWeight.bold),
+      if (mediaPath != null && !isTestPlaceholder) {
+        try {
+          await IncidentApi.instance.attachMedia(
+            incidentId: remoteIncident.id,
+            file: _selectedMediaFile!,
+            mediaType: isVideoReport ? 'video' : 'image',
+          );
+        } catch (error) {
+          if (!mounted) return;
+          setState(() {
+            _mediaUploadFailed = true;
+            _isSubmitting = false;
+          });
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text(
+                'Report received once, but evidence upload failed. Tap “Retry media”; do not submit a new report. ($error)',
               ),
+              backgroundColor: AppTheme.errorColor,
+              duration: const Duration(seconds: 8),
             ),
-          ],
+          );
+          return;
+        }
+      }
+
+      HapticFeedback.mediumImpact();
+      if (!mounted) return;
+      final messenger = ScaffoldMessenger.of(context);
+      Navigator.pop(context);
+
+      messenger.showSnackBar(
+        SnackBar(
+          content: Row(
+            children: [
+              Icon(Icons.check_circle, color: Colors.white),
+              SizedBox(width: 12),
+              Expanded(
+                child: Text(
+                  isTestPlaceholder
+                      ? 'TEST report received; placeholder media bytes were not uploaded.'
+                      : 'Report received by the server.',
+                  style: const TextStyle(fontWeight: FontWeight.bold),
+                ),
+              ),
+            ],
+          ),
+          backgroundColor: AppTheme.successColor,
+          duration: const Duration(seconds: 3),
         ),
-        backgroundColor: AppTheme.successColor,
-        duration: const Duration(seconds: 3),
-      ),
-    );
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            'Report was not submitted. Check your connection and retry. ($e)',
+          ),
+          backgroundColor: AppTheme.errorColor,
+        ),
+      );
+    } finally {
+      if (mounted) setState(() => _isSubmitting = false);
+    }
+  }
+
+  Future<void> _retryMediaUpload() async {
+    final incidentId = _createdIncidentId;
+    final file = _selectedMediaFile;
+    if (incidentId == null || file == null || file.path.startsWith('mock_')) {
+      return;
+    }
+    setState(() => _isSubmitting = true);
+    try {
+      await IncidentApi.instance.attachMedia(
+        incidentId: incidentId,
+        file: file,
+        mediaType: _isImage ? 'image' : 'video',
+      );
+      if (!mounted) return;
+      setState(() => _mediaUploadFailed = false);
+      Navigator.pop(context);
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Evidence attached to the existing report.'),
+          backgroundColor: AppTheme.successColor,
+        ),
+      );
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Evidence is still not uploaded: $error'),
+          backgroundColor: AppTheme.errorColor,
+        ),
+      );
+    } finally {
+      if (mounted) setState(() => _isSubmitting = false);
+    }
   }
 
   @override
@@ -517,9 +613,9 @@ class _ReportIncidentScreenState extends State<ReportIncidentScreen> {
         ),
         actions: [
           TextButton(
-            onPressed: _handleSubmitReport,
-            child: const Text(
-              'Post',
+            onPressed: _isSubmitting ? null : _handleSubmitReport,
+            child: Text(
+              _mediaUploadFailed ? 'Retry media' : 'Post',
               style: TextStyle(
                 color: Colors.white,
                 fontWeight: FontWeight.bold,
@@ -538,51 +634,70 @@ class _ReportIncidentScreenState extends State<ReportIncidentScreen> {
             // 1. INCIDENT TYPE
             const Text(
               'INCIDENT TYPE',
-              style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: AppTheme.textSecondary, letterSpacing: 1.1),
+              style: TextStyle(
+                fontSize: 12,
+                fontWeight: FontWeight.bold,
+                color: AppTheme.textSecondary,
+                letterSpacing: 1.1,
+              ),
             ),
             const SizedBox(height: 10),
             SingleChildScrollView(
               scrollDirection: Axis.horizontal,
               physics: const BouncingScrollPhysics(),
               child: Row(
-                children: ['Flood', 'Fire', 'Medical', 'Suspicious', 'Other'].map((type) {
-                  final isSelected = _selectedIncidentType == type;
-                  return Padding(
-                    padding: const EdgeInsets.only(right: 8.0),
-                    child: ElevatedButton.icon(
-                      onPressed: () {
-                        HapticFeedback.lightImpact();
-                        setState(() {
-                          _selectedIncidentType = type;
-                        });
-                      },
-                      icon: Icon(
-                        type == 'Flood'
-                            ? LucideIcons.droplets
-                            : (type == 'Fire'
-                                ? LucideIcons.flame
-                                : (type == 'Medical' 
-                                    ? LucideIcons.heartPulse 
-                                    : (type == 'Suspicious' ? LucideIcons.eyeOff : LucideIcons.moreHorizontal))),
-                        size: 16,
-                      ),
-                      label: Text(type),
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: isSelected ? AppTheme.primaryColor : Colors.white,
-                        foregroundColor: isSelected ? Colors.white : AppTheme.textSecondary,
-                        elevation: 0,
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(12),
-                          side: BorderSide(
-                            color: isSelected ? Colors.transparent : const Color(0xFFE5E7EB),
-                            width: 1.5,
+                children: ['Flood', 'Fire', 'Medical', 'Suspicious', 'Other']
+                    .map((type) {
+                      final isSelected = _selectedIncidentType == type;
+                      return Padding(
+                        padding: const EdgeInsets.only(right: 8.0),
+                        child: ElevatedButton.icon(
+                          onPressed: () {
+                            HapticFeedback.lightImpact();
+                            setState(() {
+                              _selectedIncidentType = type;
+                            });
+                          },
+                          icon: Icon(
+                            type == 'Flood'
+                                ? LucideIcons.droplets
+                                : (type == 'Fire'
+                                      ? LucideIcons.flame
+                                      : (type == 'Medical'
+                                            ? LucideIcons.heartPulse
+                                            : (type == 'Suspicious'
+                                                  ? LucideIcons.eyeOff
+                                                  : LucideIcons
+                                                        .moreHorizontal))),
+                            size: 16,
+                          ),
+                          label: Text(type),
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: isSelected
+                                ? AppTheme.primaryColor
+                                : Colors.white,
+                            foregroundColor: isSelected
+                                ? Colors.white
+                                : AppTheme.textSecondary,
+                            elevation: 0,
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(12),
+                              side: BorderSide(
+                                color: isSelected
+                                    ? Colors.transparent
+                                    : const Color(0xFFE5E7EB),
+                                width: 1.5,
+                              ),
+                            ),
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 18,
+                              vertical: 12,
+                            ),
                           ),
                         ),
-                        padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 12),
-                      ),
-                    ),
-                  );
-                }).toList(),
+                      );
+                    })
+                    .toList(),
               ),
             ),
             if (_selectedIncidentType == 'Other') ...[
@@ -591,15 +706,27 @@ class _ReportIncidentScreenState extends State<ReportIncidentScreen> {
                 decoration: BoxDecoration(
                   color: Colors.white,
                   borderRadius: BorderRadius.circular(16),
-                  border: Border.all(color: const Color(0xFFE5E7EB), width: 1.5),
+                  border: Border.all(
+                    color: const Color(0xFFE5E7EB),
+                    width: 1.5,
+                  ),
                 ),
-                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 16,
+                  vertical: 4,
+                ),
                 child: TextField(
                   controller: _customTypeController,
-                  style: const TextStyle(fontSize: 14.5, color: AppTheme.textPrimary),
+                  style: const TextStyle(
+                    fontSize: 14.5,
+                    color: AppTheme.textPrimary,
+                  ),
                   decoration: const InputDecoration(
                     hintText: 'E.g., Road block, Wild animal...',
-                    hintStyle: TextStyle(color: Color(0xFF9CA3AF), fontSize: 14),
+                    hintStyle: TextStyle(
+                      color: Color(0xFF9CA3AF),
+                      fontSize: 14,
+                    ),
                     border: InputBorder.none,
                     enabledBorder: InputBorder.none,
                     focusedBorder: InputBorder.none,
@@ -613,7 +740,12 @@ class _ReportIncidentScreenState extends State<ReportIncidentScreen> {
             // 2. DESCRIPTION
             const Text(
               'DESCRIPTION',
-              style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: AppTheme.textSecondary, letterSpacing: 1.1),
+              style: TextStyle(
+                fontSize: 12,
+                fontWeight: FontWeight.bold,
+                color: AppTheme.textSecondary,
+                letterSpacing: 1.1,
+              ),
             ),
             const SizedBox(height: 10),
             Container(
@@ -630,10 +762,17 @@ class _ReportIncidentScreenState extends State<ReportIncidentScreen> {
                     controller: _descriptionController,
                     maxLines: 4,
                     maxLength: 500,
-                    style: const TextStyle(fontSize: 14.5, color: AppTheme.textPrimary),
+                    style: const TextStyle(
+                      fontSize: 14.5,
+                      color: AppTheme.textPrimary,
+                    ),
                     decoration: const InputDecoration(
-                      hintText: 'Describe what you are seeing... Be specific about location, danger level, and who is affected.',
-                      hintStyle: TextStyle(color: Color(0xFF9CA3AF), fontSize: 14),
+                      hintText:
+                          'Describe what you are seeing... Be specific about location, danger level, and who is affected.',
+                      hintStyle: TextStyle(
+                        color: Color(0xFF9CA3AF),
+                        fontSize: 14,
+                      ),
                       border: InputBorder.none,
                       enabledBorder: InputBorder.none,
                       focusedBorder: InputBorder.none,
@@ -645,7 +784,11 @@ class _ReportIncidentScreenState extends State<ReportIncidentScreen> {
                   const SizedBox(height: 8),
                   Text(
                     '$_charCount / 500',
-                    style: const TextStyle(color: AppTheme.textSecondary, fontSize: 12, fontWeight: FontWeight.w600),
+                    style: const TextStyle(
+                      color: AppTheme.textSecondary,
+                      fontSize: 12,
+                      fontWeight: FontWeight.w600,
+                    ),
                   ),
                 ],
               ),
@@ -655,7 +798,12 @@ class _ReportIncidentScreenState extends State<ReportIncidentScreen> {
             // 4. ADD MEDIA
             const Text(
               'ADD MEDIA',
-              style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: AppTheme.textSecondary, letterSpacing: 1.1),
+              style: TextStyle(
+                fontSize: 12,
+                fontWeight: FontWeight.bold,
+                color: AppTheme.textSecondary,
+                letterSpacing: 1.1,
+              ),
             ),
             const SizedBox(height: 10),
             Row(
@@ -669,15 +817,18 @@ class _ReportIncidentScreenState extends State<ReportIncidentScreen> {
                 ),
               ],
             ),
-            if (_selectedMediaFile != null) ...[
-              _buildMediaPreviewWidget(),
-            ],
+            if (_selectedMediaFile != null) ...[_buildMediaPreviewWidget()],
             const SizedBox(height: 24),
 
             // 5. LOCATION
             const Text(
               'LOCATION',
-              style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: AppTheme.textSecondary, letterSpacing: 1.1),
+              style: TextStyle(
+                fontSize: 12,
+                fontWeight: FontWeight.bold,
+                color: AppTheme.textSecondary,
+                letterSpacing: 1.1,
+              ),
             ),
             const SizedBox(height: 10),
             Container(
@@ -691,8 +842,15 @@ class _ReportIncidentScreenState extends State<ReportIncidentScreen> {
                 children: [
                   Container(
                     padding: const EdgeInsets.all(10),
-                    decoration: BoxDecoration(color: AppTheme.primaryColor.withOpacity(0.1), shape: BoxShape.circle),
-                    child: const Icon(LucideIcons.mapPin, color: AppTheme.primaryColor, size: 20),
+                    decoration: BoxDecoration(
+                      color: AppTheme.primaryColor.withOpacity(0.1),
+                      shape: BoxShape.circle,
+                    ),
+                    child: const Icon(
+                      LucideIcons.mapPin,
+                      color: AppTheme.primaryColor,
+                      size: 20,
+                    ),
                   ),
                   const SizedBox(width: 12),
                   Expanded(
@@ -701,24 +859,40 @@ class _ReportIncidentScreenState extends State<ReportIncidentScreen> {
                       children: [
                         const Text(
                           'Current Location',
-                          style: TextStyle(fontWeight: FontWeight.bold, color: AppTheme.textPrimary, fontSize: 14),
+                          style: TextStyle(
+                            fontWeight: FontWeight.bold,
+                            color: AppTheme.textPrimary,
+                            fontSize: 14,
+                          ),
                         ),
                         const SizedBox(height: 2),
                         _isLoadingLocation
                             ? const SizedBox(
                                 height: 12,
                                 width: 12,
-                                child: CircularProgressIndicator(strokeWidth: 2, color: AppTheme.primaryColor),
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 2,
+                                  color: AppTheme.primaryColor,
+                                ),
                               )
                             : Text(
-                                '${_latitude.toStringAsFixed(4)}°N, ${_longitude.toStringAsFixed(4)}°W - $_locationName',
-                                style: const TextStyle(color: AppTheme.textSecondary, fontSize: 12),
+                                _latitude != null && _longitude != null
+                                    ? '${_latitude!.toStringAsFixed(4)}, ${_longitude!.toStringAsFixed(4)} · $_locationName'
+                                    : _locationName,
+                                style: const TextStyle(
+                                  color: AppTheme.textSecondary,
+                                  fontSize: 12,
+                                ),
                               ),
                       ],
                     ),
                   ),
                   IconButton(
-                    icon: const Icon(Icons.refresh, color: AppTheme.textSecondary, size: 20),
+                    icon: const Icon(
+                      Icons.refresh,
+                      color: AppTheme.textSecondary,
+                      size: 20,
+                    ),
                     onPressed: () {
                       HapticFeedback.lightImpact();
                       _fetchCurrentLocation();
@@ -732,7 +906,12 @@ class _ReportIncidentScreenState extends State<ReportIncidentScreen> {
             // 6. ANONYMOUS POST
             const Text(
               'ANONYMOUS POST',
-              style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: AppTheme.textSecondary, letterSpacing: 1.1),
+              style: TextStyle(
+                fontSize: 12,
+                fontWeight: FontWeight.bold,
+                color: AppTheme.textSecondary,
+                letterSpacing: 1.1,
+              ),
             ),
             const SizedBox(height: 10),
             Container(
@@ -746,17 +925,37 @@ class _ReportIncidentScreenState extends State<ReportIncidentScreen> {
                 children: [
                   Container(
                     padding: const EdgeInsets.all(8),
-                    decoration: const BoxDecoration(color: Color(0xFFFEE2E2), shape: BoxShape.circle),
-                    child: const Icon(LucideIcons.eyeOff, color: AppTheme.primaryColor, size: 18),
+                    decoration: const BoxDecoration(
+                      color: Color(0xFFFEE2E2),
+                      shape: BoxShape.circle,
+                    ),
+                    child: const Icon(
+                      LucideIcons.eyeOff,
+                      color: AppTheme.primaryColor,
+                      size: 18,
+                    ),
                   ),
                   const SizedBox(width: 12),
                   const Expanded(
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        Text('Post Anonymously', style: TextStyle(fontWeight: FontWeight.bold, color: AppTheme.textPrimary, fontSize: 14)),
+                        Text(
+                          'Post Anonymously',
+                          style: TextStyle(
+                            fontWeight: FontWeight.bold,
+                            color: AppTheme.textPrimary,
+                            fontSize: 14,
+                          ),
+                        ),
                         SizedBox(height: 2),
-                        Text('Hidden from public feed, but visible to EAWS', style: TextStyle(color: AppTheme.textSecondary, fontSize: 12)),
+                        Text(
+                          'Hidden from public feed, but visible to EAWS',
+                          style: TextStyle(
+                            color: AppTheme.textSecondary,
+                            fontSize: 12,
+                          ),
+                        ),
                       ],
                     ),
                   ),
@@ -779,12 +978,25 @@ class _ReportIncidentScreenState extends State<ReportIncidentScreen> {
             SizedBox(
               width: double.infinity,
               child: ElevatedButton.icon(
-                onPressed: _handleSubmitReport,
-                icon: const Icon(LucideIcons.send, size: 18),
-                label: const Text('Submit Incident Report'),
+                onPressed: _isSubmitting ? null : _handleSubmitReport,
+                icon: _isSubmitting
+                    ? const SizedBox(
+                        width: 18,
+                        height: 18,
+                        child: CircularProgressIndicator(
+                          strokeWidth: 2,
+                          color: Colors.white,
+                        ),
+                      )
+                    : const Icon(LucideIcons.send, size: 18),
+                label: Text(
+                  _isSubmitting ? 'Submitting…' : 'Submit Incident Report',
+                ),
                 style: ElevatedButton.styleFrom(
                   backgroundColor: AppTheme.primaryColor,
-                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(16),
+                  ),
                   padding: const EdgeInsets.symmetric(vertical: 18),
                   elevation: 2,
                 ),
@@ -794,7 +1006,11 @@ class _ReportIncidentScreenState extends State<ReportIncidentScreen> {
             const Center(
               child: Text(
                 'Your report will be reviewed and visible to the community.',
-                style: TextStyle(color: Colors.grey, fontSize: 12, fontWeight: FontWeight.w500),
+                style: TextStyle(
+                  color: Colors.grey,
+                  fontSize: 12,
+                  fontWeight: FontWeight.w500,
+                ),
               ),
             ),
             const SizedBox(height: 24),
@@ -804,21 +1020,28 @@ class _ReportIncidentScreenState extends State<ReportIncidentScreen> {
     );
   }
 
-
   Widget _buildMediaButton(String label, IconData icon) {
     return Container(
       height: 90,
       decoration: BoxDecoration(
         color: Colors.white,
         borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: const Color(0xFFD1D5DB), width: 1.5, style: BorderStyle.none), // Custom dashed design
+        border: Border.all(
+          color: const Color(0xFFD1D5DB),
+          width: 1.5,
+          style: BorderStyle.none,
+        ), // Custom dashed design
       ),
       child: Card(
         color: Colors.white,
         elevation: 0,
         shape: RoundedRectangleBorder(
           borderRadius: BorderRadius.circular(16),
-          side: const BorderSide(color: Color(0xFFD1D5DB), width: 1.5, strokeAlign: BorderSide.strokeAlignInside),
+          side: const BorderSide(
+            color: Color(0xFFD1D5DB),
+            width: 1.5,
+            strokeAlign: BorderSide.strokeAlignInside,
+          ),
         ),
         child: InkWell(
           onTap: () => _pickMedia(label.toLowerCase().contains('photo')),
@@ -830,7 +1053,11 @@ class _ReportIncidentScreenState extends State<ReportIncidentScreen> {
               const SizedBox(height: 8),
               Text(
                 label,
-                style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13, color: AppTheme.textPrimary),
+                style: const TextStyle(
+                  fontWeight: FontWeight.bold,
+                  fontSize: 13,
+                  color: AppTheme.textPrimary,
+                ),
               ),
             ],
           ),

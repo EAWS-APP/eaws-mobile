@@ -1,41 +1,27 @@
-import 'dart:async';
-import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:flutter/foundation.dart';
 
-/// A service to handle authentication flows for the EAWS Citizen application
-/// utilizing the live Supabase Client. Includes fallbacks for local test execution.
+import '../../core/insforge_client.dart';
+
 class AuthService {
   AuthService._privateConstructor();
 
   static final AuthService instance = AuthService._privateConstructor();
 
-  // Reference the active Supabase Client
-  final SupabaseClient _supabase = Supabase.instance.client;
+  final InsForgeClient _client = InsForgeClient.instance;
+  Map<String, dynamic> _profile = {};
+  Map<String, dynamic>? _pendingRegistrationProfile;
 
-  /// Retrieves the authenticated user's full name, if available.
-  String? get currentUserName => _supabase.auth.currentUser?.userMetadata?['full_name'];
+  String? get currentUserName =>
+      _profile['full_name']?.toString() ??
+      _client.currentUser?['name']?.toString();
 
-  /// Retrieves the authenticated user's phone number, if active.
-  String? get currentUserPhone => 
-      _supabase.auth.currentUser?.userMetadata?['phone_number'] ?? _supabase.auth.currentUser?.phone;
+  String? get currentUserPhone => _profile['phone_number']?.toString();
+  String? get currentUserGhanaCard => _profile['ghana_card']?.toString();
+  String? get currentUserEmail => _client.currentUser?['email']?.toString();
+  Map<String, dynamic> get currentProfile =>
+      Map<String, dynamic>.unmodifiable(_profile);
+  bool get isAuthenticated => _client.accessToken != null;
 
-  /// Retrieves the authenticated user's Ghana card, if available.
-  String? get currentUserGhanaCard => _supabase.auth.currentUser?.userMetadata?['ghana_card'];
-
-  /// Checks if the authenticated user has been approved by an admin.
-  bool get isApproved {
-    final meta = _supabase.auth.currentUser?.userMetadata;
-    if (meta == null) return false;
-    // Handle both boolean and string representations just in case
-    final approved = meta['is_approved'];
-    if (approved is bool) return approved;
-    if (approved is String) return approved.toLowerCase() == 'true';
-    return false;
-  }
-
-  /// Checks if there is an active session authenticated with Supabase.
-  bool get isAuthenticated => _supabase.auth.currentSession != null;
-
-  /// Registers a user using their email and password, saving custom metadata to Supabase Auth.
   Future<bool> signUpWithEmail({
     required String email,
     required String password,
@@ -44,131 +30,185 @@ class AuthService {
     required String ghanaCard,
   }) async {
     try {
-      print('EAWS Auth: Signing up via Supabase with email $email...');
-      final AuthResponse response = await _supabase.auth.signUp(
-        email: email,
-        password: password,
-        data: {
-          'full_name': fullName,
-          'phone_number': phoneNumber,
-          'ghana_card': ghanaCard,
-          'is_approved': true, // Auto-approved by 3rd party (Liveness/ID check)
+      final response = await _client.postWithQuery(
+        '/auth/users',
+        body: {
+          'email': email.trim(),
+          'password': password,
+          'name': fullName.trim(),
         },
+        query: const {'client_type': 'mobile'},
       );
-      final bool success = response.user != null;
-      print('EAWS Auth: Email signup success status: $success');
-      return success;
-    } catch (e) {
-      print('EAWS Auth: Supabase signup failed: $e');
+      if (response is! Map<String, dynamic>) {
+        throw const FormatException(
+          'InsForge returned an invalid registration response.',
+        );
+      }
+      _pendingRegistrationProfile = {
+        'full_name': fullName.trim(),
+        'phone_number': phoneNumber.trim(),
+        'ghana_card': ghanaCard.trim(),
+      };
+      final accessToken = response['accessToken'];
+      if (accessToken is String && accessToken.isNotEmpty) {
+        await _client.setSession(response);
+        await updateUserProfile(_pendingRegistrationProfile!);
+      }
+      return response['requireEmailVerification'] == true ||
+          _client.accessToken != null;
+    } catch (error, stackTrace) {
+      debugPrint('InsForge signup failed: $error\n$stackTrace');
       return false;
     }
   }
 
-  /// Signs in a user using their email and password via Supabase.
   Future<bool> signInWithEmail({
     required String email,
     required String password,
   }) async {
     try {
-      print('EAWS Auth: Signing in via Supabase with email $email...');
-      final AuthResponse response = await _supabase.auth.signInWithPassword(
-        email: email,
-        password: password,
+      final response = await _client.postWithQuery(
+        '/auth/sessions',
+        body: {
+          'method': 'password',
+          'email': email.trim(),
+          'password': password,
+        },
+        query: const {'client_type': 'mobile'},
       );
-      final bool success = response.session != null;
-      print('EAWS Auth: Email signin success: $success');
-      return success;
-    } catch (e) {
-      print('EAWS Auth: Supabase signin failed: $e');
+      if (response is! Map<String, dynamic>) {
+        throw const FormatException(
+          'InsForge returned an invalid sign-in response.',
+        );
+      }
+      await _client.setSession(response);
+      await _loadCurrentProfile();
+      return true;
+    } catch (error, stackTrace) {
+      debugPrint('InsForge sign-in failed: $error\n$stackTrace');
       return false;
     }
   }
 
-  /// Sends a one-time password (OTP) via SMS to the user's phone number using Supabase Auth.
-  /// Automatically falls back to simulation mode if the SMS provider is not yet configured.
-  Future<bool> sendOTP(String phoneNumber) async {
+  Future<bool> sendOTP(String email) async {
     try {
-      print('EAWS Auth: Dispatching Supabase SMS OTP to $phoneNumber...');
-      await _supabase.auth.signInWithOtp(
-        phone: phoneNumber,
-      );
-      print('EAWS Auth: SMS OTP successfully requested via Supabase.');
+      await _client.post('/auth/email/send-otp', body: {'email': email.trim()});
       return true;
-    } catch (e) {
-      print('EAWS Auth: Supabase SMS dispatch returned an error: $e');
-      print('EAWS Auth: Falling back to local simulated OTP flow for testing...');
-      // Simulate slight network latency
-      await Future.delayed(const Duration(milliseconds: 1200));
-      return true;
-    }
-  }
-
-  /// Verifies the OTP token against the active Supabase Auth session.
-  /// Supports '123456' as a universal sandbox bypass.
-  Future<bool> verifyOTP(String phoneNumber, String otpCode) async {
-    try {
-      // Local testing bypass
-      if (otpCode == '123456') {
-        print('EAWS Auth: Sandbox testing code "123456" entered. Bypassing Supabase check...');
-        await Future.delayed(const Duration(milliseconds: 800));
-        return true;
-      }
-
-      print('EAWS Auth: Validating OTP token with Supabase...');
-      final AuthResponse response = await _supabase.auth.verifyOTP(
-        phone: phoneNumber,
-        token: otpCode,
-        type: OtpType.sms,
-      );
-      
-      final bool success = response.session != null;
-      print('EAWS Auth: Supabase session verification status: $success');
-      return success;
-    } catch (e) {
-      print('EAWS Auth: Supabase OTP verification failed: $e');
-      // If Supabase failed, check if it was the sandbox bypass code
-      if (otpCode == '123456') {
-        print('EAWS Auth: Fallback matching succeeded for simulated test code.');
-        await Future.delayed(const Duration(milliseconds: 800));
-        return true;
-      }
+    } catch (error, stackTrace) {
+      debugPrint('InsForge email OTP request failed: $error\n$stackTrace');
       return false;
     }
   }
 
-  /// Sends a password reset link to the given email address.
+  Future<bool> sendEmailVerificationCode(String email) async {
+    try {
+      await _client.post(
+        '/auth/email/send-verification',
+        body: {'email': email.trim()},
+      );
+      return true;
+    } catch (error, stackTrace) {
+      debugPrint(
+        'InsForge email verification request failed: $error\n$stackTrace',
+      );
+      return false;
+    }
+  }
+
+  Future<bool> verifyOTP(String email, String otpCode) async {
+    try {
+      final response = await _client.postWithQuery(
+        '/auth/sessions',
+        body: {'method': 'otp', 'email': email.trim(), 'otp': otpCode.trim()},
+        query: const {'client_type': 'mobile'},
+      );
+      if (response is! Map<String, dynamic>) {
+        throw const FormatException(
+          'InsForge returned an invalid OTP response.',
+        );
+      }
+      await _client.setSession(response);
+      await _loadCurrentProfile();
+      return true;
+    } catch (error, stackTrace) {
+      debugPrint('InsForge OTP verification failed: $error\n$stackTrace');
+      return false;
+    }
+  }
+
+  Future<bool> verifyEmailCode(String email, String otpCode) async {
+    try {
+      final response = await _client.postWithQuery(
+        '/auth/email/verify',
+        body: {'email': email.trim(), 'otp': otpCode.trim()},
+        query: const {'client_type': 'mobile'},
+      );
+      if (response is! Map<String, dynamic>) {
+        throw const FormatException(
+          'InsForge returned an invalid verification response.',
+        );
+      }
+      await _client.setSession(response);
+      final pendingProfile = _pendingRegistrationProfile;
+      if (pendingProfile != null) {
+        await updateUserProfile(pendingProfile);
+        _pendingRegistrationProfile = null;
+      } else {
+        await _loadCurrentProfile();
+      }
+      return true;
+    } catch (error, stackTrace) {
+      debugPrint('InsForge email verification failed: $error\n$stackTrace');
+      return false;
+    }
+  }
+
   Future<bool> resetPasswordForEmail(String email) async {
     try {
-      print('EAWS Auth: Sending password reset email to $email...');
-      await _supabase.auth.resetPasswordForEmail(email);
-      print('EAWS Auth: Password reset email sent successfully.');
-      return true;
-    } catch (e) {
-      print('EAWS Auth: Password reset failed: $e');
-      return false;
-    }
-  }
-
-  /// Updates the user metadata for the current user.
-  Future<bool> updateUserMetadata(Map<String, dynamic> data) async {
-    try {
-      final response = await _supabase.auth.updateUser(
-        UserAttributes(data: data),
+      await _client.post(
+        '/auth/email/send-reset-password',
+        body: {'email': email.trim()},
       );
-      return response.user != null;
-    } catch (e) {
-      print('EAWS Auth: Failed to update metadata: $e');
+      return true;
+    } catch (error, stackTrace) {
+      debugPrint('InsForge password reset request failed: $error\n$stackTrace');
       return false;
     }
   }
 
-  /// Logs the user out of their active session.
+  Future<bool> updateUserProfile(Map<String, dynamic> profile) async {
+    try {
+      await _client.patch('/auth/profiles/current', body: {'profile': profile});
+      _profile = {..._profile, ...profile};
+      await _client.cacheProfile(_profile);
+      return true;
+    } catch (error, stackTrace) {
+      debugPrint('InsForge profile update failed: $error\n$stackTrace');
+      return false;
+    }
+  }
+
+  Future<void> _loadCurrentProfile() async {
+    final userId = _client.currentUser?['id'];
+    if (userId == null) return;
+    final response = await _client.get(
+      '/auth/profiles/${Uri.encodeComponent(userId.toString())}',
+    );
+    if (response is Map && response['profile'] is Map) {
+      _profile = Map<String, dynamic>.from(response['profile'] as Map);
+      await _client.cacheProfile(_profile);
+    }
+  }
+
   Future<void> signOut() async {
     try {
-      await _supabase.auth.signOut();
-      print('EAWS Auth: Successfully signed out from Supabase.');
-    } catch (e) {
-      print('EAWS Auth: Supabase sign out error: $e');
+      if (_client.accessToken != null) {
+        await _client.post('/auth/logout');
+      }
+    } finally {
+      _profile = {};
+      _pendingRegistrationProfile = null;
+      await _client.clearSession();
     }
   }
 }

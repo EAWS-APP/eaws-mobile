@@ -23,7 +23,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
   @override
   void initState() {
     super.initState();
-    // Load from supabase or local session
+    // Load the profile restored by the authentication service.
     ProfileData.loadFromSession();
   }
 
@@ -93,7 +93,10 @@ class _ProfileScreenState extends State<ProfileScreen> {
                           decoration: BoxDecoration(
                             color: Colors.white,
                             borderRadius: BorderRadius.circular(20),
-                            border: Border.all(color: const Color(0xFFE5E7EB), width: 1.5),
+                            border: Border.all(
+                              color: const Color(0xFFE5E7EB),
+                              width: 1.5,
+                            ),
                           ),
                           child: Column(
                             children: [
@@ -106,7 +109,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
                                   final result = await Navigator.push(
                                     context,
                                     MaterialPageRoute(
-                                      builder: (context) => const EditProfileScreen(),
+                                      builder: (context) =>
+                                          const EditProfileScreen(),
                                     ),
                                   );
                                   // Refresh layout state if settings returned save confirm
@@ -155,7 +159,10 @@ class _ProfileScreenState extends State<ProfileScreen> {
                           decoration: BoxDecoration(
                             color: Colors.white,
                             borderRadius: BorderRadius.circular(20),
-                            border: Border.all(color: const Color(0xFFE5E7EB), width: 1.5),
+                            border: Border.all(
+                              color: const Color(0xFFE5E7EB),
+                              width: 1.5,
+                            ),
                           ),
                           child: Column(
                             children: [
@@ -214,7 +221,10 @@ class _ProfileScreenState extends State<ProfileScreen> {
                           decoration: BoxDecoration(
                             color: Colors.white,
                             borderRadius: BorderRadius.circular(20),
-                            border: Border.all(color: const Color(0xFFE5E7EB), width: 1.5),
+                            border: Border.all(
+                              color: const Color(0xFFE5E7EB),
+                              width: 1.5,
+                            ),
                           ),
                           child: Column(
                             children: [
@@ -248,7 +258,11 @@ class _ProfileScreenState extends State<ProfileScreen> {
                               HapticFeedback.mediumImpact();
                               _showSignOutDialog();
                             },
-                            icon: const Icon(LucideIcons.logOut, color: AppTheme.primaryColor, size: 18),
+                            icon: const Icon(
+                              LucideIcons.logOut,
+                              color: AppTheme.primaryColor,
+                              size: 18,
+                            ),
                             label: const Text(
                               'Sign Out',
                               style: TextStyle(
@@ -259,8 +273,13 @@ class _ProfileScreenState extends State<ProfileScreen> {
                             ),
                             style: OutlinedButton.styleFrom(
                               backgroundColor: Colors.white,
-                              side: const BorderSide(color: AppTheme.primaryColor, width: 1.5),
-                              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+                              side: const BorderSide(
+                                color: AppTheme.primaryColor,
+                                width: 1.5,
+                              ),
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(16),
+                              ),
                               padding: const EdgeInsets.symmetric(vertical: 18),
                             ),
                           ),
@@ -284,7 +303,6 @@ class _ProfileScreenState extends State<ProfileScreen> {
               ), // Column
             ), // SingleChildScrollView
           ), // Positioned.fill
-          
           // 2. Fixed Top Curved Red Header Notch (stationary, stays stiff while list scrolls behind it!)
           Positioned(
             top: 0,
@@ -318,7 +336,9 @@ class _ProfileScreenState extends State<ProfileScreen> {
                           HapticFeedback.lightImpact();
                           ScaffoldMessenger.of(context).showSnackBar(
                             const SnackBar(
-                              content: Text('Use the bottom bar to switch screens!'),
+                              content: Text(
+                                'Use the bottom bar to switch screens!',
+                              ),
                               backgroundColor: AppTheme.primaryColor,
                             ),
                           );
@@ -332,7 +352,9 @@ class _ProfileScreenState extends State<ProfileScreen> {
                           fontWeight: FontWeight.bold,
                         ),
                       ),
-                      const SizedBox(width: 48), // Invisible spacer to balance the back arrow and keep title centered perfectly
+                      const SizedBox(
+                        width: 48,
+                      ), // Invisible spacer to balance the back arrow and keep title centered perfectly
                     ],
                   ),
                   const SizedBox(height: 4),
@@ -358,7 +380,9 @@ class _ProfileScreenState extends State<ProfileScreen> {
                         child: Container(
                           padding: const EdgeInsets.all(3),
                           decoration: BoxDecoration(
-                            color: const Color(0xFF10B981), // Bright emerald green matching screenshot checkmark
+                            color: const Color(
+                              0xFF10B981,
+                            ), // Bright emerald green matching screenshot checkmark
                             shape: BoxShape.circle,
                             border: Border.all(color: Colors.white, width: 1.5),
                           ),
@@ -398,9 +422,14 @@ class _ProfileScreenState extends State<ProfileScreen> {
 
                   // Soft light green Verified Citizen capsule matching Screenshot 2
                   Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 16,
+                      vertical: 6,
+                    ),
                     decoration: BoxDecoration(
-                      color: const Color(0xFFE6F7F0), // Soft mint green background
+                      color: const Color(
+                        0xFFE6F7F0,
+                      ), // Soft mint green background
                       borderRadius: BorderRadius.circular(100),
                     ),
                     child: const Text(
@@ -448,7 +477,10 @@ class _ProfileScreenState extends State<ProfileScreen> {
       subtitle: subtitle.isNotEmpty
           ? Text(
               subtitle,
-              style: const TextStyle(color: AppTheme.textSecondary, fontSize: 12),
+              style: const TextStyle(
+                color: AppTheme.textSecondary,
+                fontSize: 12,
+              ),
             )
           : null,
       trailing: const Icon(
@@ -505,12 +537,20 @@ class _ProfileScreenState extends State<ProfileScreen> {
       context: context,
       builder: (context) => AlertDialog(
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-        title: const Text('Sign Out', style: TextStyle(fontWeight: FontWeight.bold)),
-        content: const Text('Are you sure you want to sign out of the EAWS app?'),
+        title: const Text(
+          'Sign Out',
+          style: TextStyle(fontWeight: FontWeight.bold),
+        ),
+        content: const Text(
+          'Are you sure you want to sign out of the EAWS app?',
+        ),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(context),
-            child: const Text('Cancel', style: TextStyle(color: AppTheme.textSecondary)),
+            child: const Text(
+              'Cancel',
+              style: TextStyle(color: AppTheme.textSecondary),
+            ),
           ),
           TextButton(
             onPressed: () {

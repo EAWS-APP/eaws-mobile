@@ -1,32 +1,67 @@
 import 'dart:convert';
-import 'dart:io';
 
-import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:flutter/foundation.dart';
+import 'package:http/http.dart' as http;
+
+import 'insforge_client.dart';
 
 class EawsApiClient {
   EawsApiClient._();
 
   static final EawsApiClient instance = EawsApiClient._();
+  String? _baseUrlOverride;
+  http.Client _httpClient = http.Client();
 
-  static String get baseUrl {
-    try {
-      if (Platform.isAndroid) {
-        return 'http://10.0.2.2:5001/api';
-      }
-    } catch (_) {}
-    return 'http://localhost:5001/api';
+  String get baseUrl {
+    if (_baseUrlOverride != null) return _baseUrlOverride!;
+    const configuredUrl = String.fromEnvironment('EAWS_API_URL');
+    if (configuredUrl.isNotEmpty) {
+      return configuredUrl.endsWith('/')
+          ? configuredUrl.substring(0, configuredUrl.length - 1)
+          : configuredUrl;
+    }
+    return 'http://127.0.0.1:5001/api';
   }
 
-  Future<dynamic> get(String path, {Map<String, String>? query}) {
-    return _send('GET', path, query: query);
+  @visibleForTesting
+  void configureForTesting({
+    required String baseUrl,
+    required http.Client httpClient,
+  }) {
+    _baseUrlOverride = baseUrl;
+    _httpClient = httpClient;
   }
 
-  Future<dynamic> post(String path, {Map<String, dynamic>? body}) {
-    return _send('POST', path, body: body);
+  Future<dynamic> get(
+    String path, {
+    Map<String, String>? query,
+    Map<String, String> headers = const {},
+  }) {
+    return _send('GET', path, query: query, additionalHeaders: headers);
+  }
+
+  Future<dynamic> post(
+    String path, {
+    Map<String, dynamic>? body,
+    Map<String, String> headers = const {},
+  }) {
+    return _send('POST', path, body: body, additionalHeaders: headers);
   }
 
   Future<dynamic> patch(String path, {Map<String, dynamic>? body}) {
     return _send('PATCH', path, body: body);
+  }
+
+  Future<dynamic> postWithIdempotencyKey(
+    String path, {
+    required String idempotencyKey,
+    required Map<String, dynamic> body,
+  }) {
+    return _send(
+      'POST',
+      path,
+      body: {...body, 'client_event_id': idempotencyKey},
+    );
   }
 
   Future<void> delete(String path) async {
@@ -38,41 +73,51 @@ class EawsApiClient {
     String path, {
     Map<String, String>? query,
     Map<String, dynamic>? body,
+    Map<String, String> additionalHeaders = const {},
   }) async {
-    final session = Supabase.instance.client.auth.currentSession;
     final uri = Uri.parse('$baseUrl$path').replace(queryParameters: query);
-    final client = HttpClient();
+    final token = InsForgeClient.instance.accessToken;
+    final headers = <String, String>{
+      'accept': 'application/json',
+      'content-type': 'application/json',
+      if (token != null) 'authorization': 'Bearer $token',
+    };
+    if (token != null) headers['authorization'] = 'Bearer $token';
+    headers.addAll(additionalHeaders);
+    final encodedBody = body == null ? null : jsonEncode(body);
+    final response = switch (method) {
+      'GET' => await _httpClient.get(uri, headers: headers),
+      'POST' => await _httpClient.post(
+        uri,
+        headers: headers,
+        body: encodedBody,
+      ),
+      'PATCH' => await _httpClient.patch(
+        uri,
+        headers: headers,
+        body: encodedBody,
+      ),
+      'DELETE' => await _httpClient.delete(
+        uri,
+        headers: headers,
+        body: encodedBody,
+      ),
+      _ => throw ArgumentError.value(
+        method,
+        'method',
+        'Unsupported HTTP method',
+      ),
+    };
+    final responseBody = utf8.decode(response.bodyBytes);
 
-    try {
-      final request = await client.openUrl(method, uri);
-      request.headers.set(HttpHeaders.acceptHeader, 'application/json');
-      request.headers.set(HttpHeaders.contentTypeHeader, 'application/json');
-      if (session?.accessToken != null) {
-        request.headers.set(HttpHeaders.authorizationHeader, 'Bearer ${session!.accessToken}');
-      }
-
-      if (body != null) {
-        request.write(jsonEncode(body));
-      }
-
-      final response = await request.close();
-      final responseBody = await response.transform(utf8.decoder).join();
-
-      if (response.statusCode < 200 || response.statusCode >= 300) {
-        throw HttpException(
-          responseBody.isNotEmpty ? responseBody : 'EAWS API request failed',
-          uri: uri,
-        );
-      }
-
-      if (response.statusCode == 204 || responseBody.isEmpty) {
-        return null;
-      }
-
-      return jsonDecode(responseBody);
-    } finally {
-      client.close(force: true);
+    if (response.statusCode < 200 || response.statusCode >= 300) {
+      throw InsForgeApiException(
+        response.statusCode,
+        responseBody.isNotEmpty ? responseBody : 'EAWS API request failed',
+      );
     }
+
+    if (response.statusCode == 204 || responseBody.isEmpty) return null;
+    return jsonDecode(responseBody);
   }
 }
-

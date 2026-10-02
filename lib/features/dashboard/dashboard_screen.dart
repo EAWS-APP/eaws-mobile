@@ -1,9 +1,11 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:lucide_icons/lucide_icons.dart';
 import '../../core/theme.dart';
 import '../home/home_screen.dart';
 import '../feed/community_feed_screen.dart';
+import '../messages/citizen_messages_screen.dart';
 import '../sos/media_uploads_screen.dart';
 import '../sos/sos_screen.dart';
 import '../profile/profile_screen.dart';
@@ -22,8 +24,25 @@ class _DashboardScreenState extends State<DashboardScreen> {
     const HomeScreen(),
     const CommunityFeedScreen(),
     const SOSScreen(),
+    const CitizenMessagesScreen(),
     const ProfileScreen(),
   ];
+
+  @override
+  void initState() {
+    super.initState();
+    _restoreActiveSosTab();
+  }
+
+  Future<void> _restoreActiveSosTab() async {
+    final prefs = await SharedPreferences.getInstance();
+    if (!mounted ||
+        prefs.getString('eaws_active_sos_client_event_id') == null) {
+      return;
+    }
+    setState(() => _currentIndex = 2);
+    globalSosActiveNotifier.value = true;
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -66,6 +85,12 @@ class _DashboardScreenState extends State<DashboardScreen> {
                   ),
                   _buildNavItem(
                     3,
+                    LucideIcons.messageSquare,
+                    LucideIcons.messageSquare,
+                    'Messages',
+                  ),
+                  _buildNavItem(
+                    4,
                     LucideIcons.user,
                     LucideIcons.user,
                     'Profile',

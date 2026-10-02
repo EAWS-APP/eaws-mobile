@@ -1,6 +1,6 @@
+import 'dart:io';
 import 'dart:async';
 import 'dart:convert';
-import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:lucide_icons/lucide_icons.dart';
@@ -16,10 +16,13 @@ import '../feed/report_incident_screen.dart';
 import 'package:flutter_contacts/flutter_contacts.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:connectivity_plus/connectivity_plus.dart';
-import 'package:permission_handler/permission_handler.dart' hide PermissionStatus;
+import 'package:permission_handler/permission_handler.dart'
+    hide PermissionStatus;
 import 'models/alert_model.dart';
 import 'models/safe_zone_model.dart';
 import 'services/home_service.dart';
+
+const bool _demoMode = bool.fromEnvironment('EAWS_DEMO_MODE');
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -29,19 +32,14 @@ class HomeScreen extends StatefulWidget {
 }
 
 class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
-  // SOS hold progress animations
-  late AnimationController _sosHoldController;
-  bool _isSosHolding = false;
-  Timer? _vibrationTimer;
-
   // Pulse animation for GPS status indicator
   late AnimationController _pulseController;
 
   // Live System GPS Location State
   String _currentLocationName = 'Locating...';
-  double _latitude = 1.3521;
-  double _longitude = 103.8198;
-  double _accuracy = 3.0;
+  double _latitude = 0;
+  double _longitude = 0;
+  double _accuracy = 0;
   bool _locationLoaded = false;
 
   // Emergency Contacts state
@@ -53,6 +51,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
   SafeZoneModel? _nearestZone;
   double? _nearestZoneDistance;
   bool _alertsLoading = true;
+  bool _alertsLoadFailed = false;
 
   // Connectivity state
   StreamSubscription<List<ConnectivityResult>>? _connectivitySubscription;
@@ -61,26 +60,6 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
   @override
   void initState() {
     super.initState();
-
-    _sosHoldController = AnimationController(
-      vsync: this,
-      duration: const Duration(seconds: 3),
-    );
-
-    _sosHoldController.addListener(() {
-      setState(() {});
-    });
-
-    _sosHoldController.addStatusListener((status) {
-      if (status == AnimationStatus.completed) {
-        _vibrationTimer?.cancel();
-        _sosHoldController.reset();
-        setState(() {
-          _isSosHolding = false;
-        });
-        _triggerSOS();
-      }
-    });
 
     _pulseController = AnimationController(
       vsync: this,
@@ -94,10 +73,14 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
   }
 
   void _initConnectivity() {
-    _connectivitySubscription = Connectivity().onConnectivityChanged.listen((List<ConnectivityResult> results) {
+    _connectivitySubscription = Connectivity().onConnectivityChanged.listen((
+      List<ConnectivityResult> results,
+    ) {
       if (mounted) {
         setState(() {
-          _isOffline = results.every((result) => result == ConnectivityResult.none);
+          _isOffline = results.every(
+            (result) => result == ConnectivityResult.none,
+          );
         });
       }
     });
@@ -113,6 +96,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
           _activeAlerts = alerts;
           _safeZones = zones;
           _alertsLoading = false;
+          _alertsLoadFailed = false;
         });
       }
 
@@ -125,20 +109,27 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
       if (mounted) {
         setState(() {
           _alertsLoading = false;
+          _alertsLoadFailed = true;
         });
       }
     }
   }
 
   void _updateNearestZone() {
-    if (_safeZones.isEmpty) return;
+    if (!_locationLoaded || _safeZones.isEmpty) return;
     final openZones = _safeZones.where((z) => z.isOpen).toList();
     if (openZones.isEmpty) return;
-    openZones.sort((a, b) =>
-        a.distanceFrom(_latitude, _longitude).compareTo(b.distanceFrom(_latitude, _longitude)));
+    openZones.sort(
+      (a, b) => a
+          .distanceFrom(_latitude, _longitude)
+          .compareTo(b.distanceFrom(_latitude, _longitude)),
+    );
     setState(() {
       _nearestZone = openZones.first;
-      _nearestZoneDistance = openZones.first.distanceFrom(_latitude, _longitude);
+      _nearestZoneDistance = openZones.first.distanceFrom(
+        _latitude,
+        _longitude,
+      );
     });
   }
 
@@ -180,32 +171,16 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
         return;
       }
 
-      // Auto-request permission on first load (triggers native iOS dialog)
+      // Home must remain immediately usable; location permission is never
+      // requested until after the user has triggered SOS.
       permission = await Geolocator.checkPermission();
-      if (permission == LocationPermission.denied) {
-        permission = await Geolocator.requestPermission();
-        if (permission == LocationPermission.denied) {
-          setState(() {
-            _currentLocationName = 'Location permission denied';
-          });
-          return;
-        }
-      }
-      
-      // EAWS specific: escalate to background permissions for SOS tracking
-      if (permission == LocationPermission.whileInUse) {
-        final status = await Permission.locationAlways.request();
-        if (status.isGranted) {
-          print('EAWS: Successfully escalated to Background Location Always Allow');
-        }
-      }
-      
-      if (permission == LocationPermission.deniedForever) {
+      if (permission == LocationPermission.denied ||
+          permission == LocationPermission.deniedForever) {
         setState(() {
-          _currentLocationName = 'Location permission restricted';
+          _currentLocationName = 'Location not shared';
         });
         return;
-      } 
+      }
 
       // Retrieve high accuracy position with timeout and fallback
       Position? position;
@@ -231,7 +206,8 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
         _longitude = position.longitude;
         _accuracy = position.accuracy;
         _locationLoaded = true;
-        _currentLocationName = '${_latitude.toStringAsFixed(4)}\u00B0, ${_longitude.toStringAsFixed(4)}\u00B0';
+        _currentLocationName =
+            '${_latitude.toStringAsFixed(4)}\u00B0, ${_longitude.toStringAsFixed(4)}\u00B0';
       });
 
       // Recalculate nearest safe zone now that we have coordinates
@@ -279,7 +255,10 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
       bool serviceEnabled = await Geolocator.isLocationServiceEnabled();
       if (!serviceEnabled) {
         if (mounted) Navigator.pop(context);
-        _showErrorDialog('Location Services Disabled', 'Please enable location services in your system settings.');
+        _showErrorDialog(
+          'Location Services Disabled',
+          'Please enable location services in your system settings.',
+        );
         return;
       }
 
@@ -288,14 +267,20 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
         permission = await Geolocator.requestPermission();
         if (permission == LocationPermission.denied) {
           if (mounted) Navigator.pop(context);
-          _showErrorDialog('Permission Denied', 'GPS location permissions were denied by the user.');
+          _showErrorDialog(
+            'Permission Denied',
+            'GPS location permissions were denied by the user.',
+          );
           return;
         }
       }
 
       if (permission == LocationPermission.deniedForever) {
         if (mounted) Navigator.pop(context);
-        _showErrorDialog('Permission Permanently Denied', 'GPS location permissions are permanently disabled. Please grant them in iOS Settings.');
+        _showErrorDialog(
+          'Permission Permanently Denied',
+          'GPS location permissions are permanently disabled. Please grant them in iOS Settings.',
+        );
         return;
       }
 
@@ -307,13 +292,18 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
           timeLimit: const Duration(seconds: 10),
         );
       } catch (e) {
-        print('EAWS getCurrentPosition timeout/error, fetching last known... $e');
+        print(
+          'EAWS getCurrentPosition timeout/error, fetching last known... $e',
+        );
         position = await Geolocator.getLastKnownPosition();
       }
 
       if (position == null) {
         if (mounted) Navigator.pop(context);
-        _showErrorDialog('GPS Calibration Failed', 'Failed to retrieve coordinates from satellite sensors. Please try again.');
+        _showErrorDialog(
+          'GPS Calibration Failed',
+          'Failed to retrieve coordinates from satellite sensors. Please try again.',
+        );
         return;
       }
 
@@ -322,7 +312,8 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
         _longitude = position.longitude;
         _accuracy = position.accuracy;
         _locationLoaded = true;
-        _currentLocationName = '${_latitude.toStringAsFixed(4)}°, ${_longitude.toStringAsFixed(4)}°';
+        _currentLocationName =
+            '${_latitude.toStringAsFixed(4)}°, ${_longitude.toStringAsFixed(4)}°';
       });
 
       // 3. Query OpenStreetMap Nominatim reverse geocoding API to dynamically translate to city/country
@@ -331,7 +322,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
       if (mounted) {
         Navigator.pop(context); // Close loading modal
         HapticFeedback.mediumImpact();
-        
+
         // Show success snackbar
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
@@ -342,7 +333,10 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                 Expanded(
                   child: Text(
                     'GPS successfully calibrated! Current: $_currentLocationName',
-                    style: const TextStyle(fontWeight: FontWeight.w600, color: Colors.white),
+                    style: const TextStyle(
+                      fontWeight: FontWeight.w600,
+                      color: Colors.white,
+                    ),
                   ),
                 ),
               ],
@@ -356,7 +350,10 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
       print('EAWS Calibration Error: $e');
       if (mounted) {
         Navigator.pop(context);
-        _showErrorDialog('GPS Calibration Error', 'An unexpected error occurred while accessing the GPS hardware: $e');
+        _showErrorDialog(
+          'GPS Calibration Error',
+          'An unexpected error occurred while accessing the GPS hardware: $e',
+        );
       }
     }
   }
@@ -366,16 +363,26 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
       context: context,
       builder: (context) => AlertDialog(
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-        icon: const Icon(LucideIcons.alertTriangle, color: AppTheme.errorColor, size: 40),
+        icon: const Icon(
+          LucideIcons.alertTriangle,
+          color: AppTheme.errorColor,
+          size: 40,
+        ),
         title: Text(title, style: const TextStyle(fontWeight: FontWeight.bold)),
         content: Text(message, textAlign: TextAlign.center),
         actions: [
           Center(
             child: TextButton(
               onPressed: () => Navigator.pop(context),
-              child: const Text('Dismiss', style: TextStyle(fontWeight: FontWeight.bold, color: AppTheme.primaryColor)),
+              child: const Text(
+                'Dismiss',
+                style: TextStyle(
+                  fontWeight: FontWeight.bold,
+                  color: AppTheme.primaryColor,
+                ),
+              ),
             ),
-          )
+          ),
         ],
       ),
     );
@@ -386,7 +393,9 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
       final client = HttpClient();
       client.userAgent = 'EAWS_App/1.0';
       final request = await client.getUrl(
-        Uri.parse('https://nominatim.openstreetmap.org/reverse?format=json&lat=$lat&lon=$lon'),
+        Uri.parse(
+          'https://nominatim.openstreetmap.org/reverse?format=json&lat=$lat&lon=$lon',
+        ),
       );
       final response = await request.close();
       if (response.statusCode == 200) {
@@ -394,7 +403,13 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
         final data = json.decode(content);
         final address = data['address'];
         if (address != null) {
-          final String city = address['city'] ?? address['town'] ?? address['village'] ?? address['suburb'] ?? address['state'] ?? '';
+          final String city =
+              address['city'] ??
+              address['town'] ??
+              address['village'] ??
+              address['suburb'] ??
+              address['state'] ??
+              '';
           final String country = address['country'] ?? '';
           final String name = city.isNotEmpty ? '$city, $country' : country;
           if (name.isNotEmpty) {
@@ -411,43 +426,79 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
 
   @override
   void dispose() {
-    _sosHoldController.dispose();
     _pulseController.dispose();
-    _vibrationTimer?.cancel();
     _connectivitySubscription?.cancel();
     super.dispose();
   }
 
-  // Starts tracking user holding down the SOS button
-  void _onSosHoldStart() {
-    setState(() {
-      _isSosHolding = true;
-    });
-    _sosHoldController.forward();
-    
-    // Periodically pulse vibration to simulate feedback during hold
-    _vibrationTimer = Timer.periodic(const Duration(milliseconds: 300), (timer) {
-      HapticFeedback.lightImpact();
-    });
-  }
-
-  // Stops tracking user holding down SOS button (if they release before 3 seconds)
-  void _onSosHoldEnd() {
-    _vibrationTimer?.cancel();
-    if (_sosHoldController.status == AnimationStatus.forward) {
-      _sosHoldController.reverse();
-    }
-    setState(() {
-      _isSosHolding = false;
-    });
-  }
-
-  // Redirect to active SOS screen
   void _triggerSOS() {
+    HapticFeedback.mediumImpact();
     Navigator.push(
       context,
       MaterialPageRoute(
         builder: (context) => const SOSScreen(startImmediately: true),
+      ),
+    );
+  }
+
+  void _showFirstAidGuide() {
+    showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      showDragHandle: true,
+      builder: (context) => SafeArea(
+        child: SingleChildScrollView(
+          padding: const EdgeInsets.fromLTRB(24, 8, 24, 32),
+          child: const Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                'First aid',
+                style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold),
+              ),
+              SizedBox(height: 8),
+              Text(
+                'Quick offline guidance. Follow instructions from qualified responders when available.',
+              ),
+              SizedBox(height: 20),
+              Text(
+                'Before helping',
+                style: TextStyle(fontWeight: FontWeight.bold),
+              ),
+              Text(
+                'Check that the scene is safe. Ask someone nearby to contact local emergency services and bring an AED if available.',
+              ),
+              SizedBox(height: 16),
+              Text(
+                'Unresponsive or not breathing normally',
+                style: TextStyle(fontWeight: FontWeight.bold),
+              ),
+              Text(
+                'Ask someone to call for help. If you are trained, begin CPR and use an AED as soon as available. Continue until help takes over or the person responds.',
+              ),
+              SizedBox(height: 16),
+              Text(
+                'Severe bleeding',
+                style: TextStyle(fontWeight: FontWeight.bold),
+              ),
+              Text(
+                'Apply firm, continuous pressure with clean cloth or gauze. Do not remove an embedded object; press around it.',
+              ),
+              SizedBox(height: 16),
+              Text(
+                'Possible spinal injury',
+                style: TextStyle(fontWeight: FontWeight.bold),
+              ),
+              Text(
+                'Do not move the person unless there is immediate danger. Keep them still and warm while waiting for help.',
+              ),
+              SizedBox(height: 16),
+              Text(
+                'This guide is general information, not a substitute for emergency professionals.',
+              ),
+            ],
+          ),
+        ),
       ),
     );
   }
@@ -457,9 +508,7 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
     HapticFeedback.mediumImpact();
     Navigator.push(
       context,
-      MaterialPageRoute(
-        builder: (context) => const ReportIncidentScreen(),
-      ),
+      MaterialPageRoute(builder: (context) => const ReportIncidentScreen()),
     );
   }
 
@@ -471,91 +520,392 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
       context: context,
       isScrollControlled: true,
       backgroundColor: Colors.white,
-      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(24))),
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+      ),
       builder: (context) {
-        return StatefulBuilder(builder: (context, setModalState) {
-          return Container(
-            height: MediaQuery.of(context).size.height * 0.85,
-            decoration: const BoxDecoration(color: Colors.white, borderRadius: BorderRadius.vertical(top: Radius.circular(24))),
-            child: Column(
-              children: [
-                // Red header
-                Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 20),
-                  decoration: const BoxDecoration(color: AppTheme.primaryColor, borderRadius: BorderRadius.vertical(top: Radius.circular(24))),
-                  child: Row(children: [
-                    InkWell(onTap: () => Navigator.pop(context), child: Container(padding: const EdgeInsets.all(8), decoration: BoxDecoration(color: Colors.white.withOpacity(0.2), shape: BoxShape.circle), child: const Icon(LucideIcons.chevronLeft, color: Colors.white, size: 20))),
-                    const Expanded(child: Column(children: [Text('Share Location', textAlign: TextAlign.center, style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold)), SizedBox(height: 2), Text('Send your live position', textAlign: TextAlign.center, style: TextStyle(color: Colors.white70, fontSize: 12))])),
-                    const SizedBox(width: 36),
-                  ]),
-                ),
-                Expanded(
-                  child: SingleChildScrollView(padding: const EdgeInsets.all(20), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                    // Map placeholder
-                    Container(
-                      height: 180, width: double.infinity,
-                      decoration: BoxDecoration(color: const Color(0xFFE8F5E9), borderRadius: BorderRadius.circular(16), border: Border.all(color: const Color(0xFFC8E6C9))),
-                      child: Stack(children: [
-                        Center(child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
-                          Container(padding: const EdgeInsets.all(12), decoration: BoxDecoration(color: AppTheme.primaryColor.withOpacity(0.15), shape: BoxShape.circle), child: const Icon(LucideIcons.mapPin, color: AppTheme.primaryColor, size: 32)),
-                          const SizedBox(height: 8),
-                          Text(_currentLocationName, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13)),
-                          Text('Accuracy: ±${_accuracy.toStringAsFixed(1)}m · Updated now', style: const TextStyle(color: AppTheme.textSecondary, fontSize: 11)),
-                        ])),
-                        Positioned(top: 12, left: 12, child: Container(padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4), decoration: BoxDecoration(color: AppTheme.primaryColor, borderRadius: BorderRadius.circular(12)), child: Row(mainAxisSize: MainAxisSize.min, children: const [Icon(LucideIcons.radio, color: Colors.white, size: 12), SizedBox(width: 4), Text('LIVE', style: TextStyle(color: Colors.white, fontSize: 10, fontWeight: FontWeight.bold))]))),
-                      ]),
+        return StatefulBuilder(
+          builder: (context, setModalState) {
+            return Container(
+              height: MediaQuery.of(context).size.height * 0.85,
+              decoration: const BoxDecoration(
+                color: Colors.white,
+                borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+              ),
+              child: Column(
+                children: [
+                  // Red header
+                  Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 16,
+                      vertical: 20,
                     ),
-                    const SizedBox(height: 20),
-                    // Current Location card
-                    Container(padding: const EdgeInsets.all(16), decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(12), border: Border.all(color: const Color(0xFFE5E7EB))), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                      Row(children: [
-                        const Icon(LucideIcons.mapPin, color: AppTheme.primaryColor, size: 18),
-                        const SizedBox(width: 8),
-                        const Text('Current Location', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 15)),
-                        const Spacer(),
-                        GestureDetector(onTap: _calibrateGPS, child: Row(children: const [Icon(LucideIcons.refreshCw, color: AppTheme.primaryColor, size: 14), SizedBox(width: 4), Text('Refresh', style: TextStyle(color: AppTheme.primaryColor, fontWeight: FontWeight.bold, fontSize: 12))])),
-                      ]),
-                      const SizedBox(height: 16),
-                      Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [const Text('Latitude', style: TextStyle(color: AppTheme.textSecondary, fontSize: 13)), Text('${_latitude.toStringAsFixed(4)}° ${_latitude >= 0 ? "N" : "S"}', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14))]),
-                      const Divider(height: 20),
-                      Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [const Text('Longitude', style: TextStyle(color: AppTheme.textSecondary, fontSize: 13)), Text('${_longitude.toStringAsFixed(4)}° ${_longitude >= 0 ? "E" : "W"}', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14))]),
-                      const SizedBox(height: 12),
-                      Row(children: [const Icon(LucideIcons.mapPin, size: 14, color: AppTheme.textSecondary), const SizedBox(width: 6), Expanded(child: Text(_currentLocationName, style: const TextStyle(color: AppTheme.textSecondary, fontSize: 12)))]),
-                    ])),
+                    decoration: const BoxDecoration(
+                      color: AppTheme.primaryColor,
+                      borderRadius: BorderRadius.vertical(
+                        top: Radius.circular(24),
+                      ),
+                    ),
+                    child: Row(
+                      children: [
+                        InkWell(
+                          onTap: () => Navigator.pop(context),
+                          child: Container(
+                            padding: const EdgeInsets.all(8),
+                            decoration: BoxDecoration(
+                              color: Colors.white.withOpacity(0.2),
+                              shape: BoxShape.circle,
+                            ),
+                            child: const Icon(
+                              LucideIcons.chevronLeft,
+                              color: Colors.white,
+                              size: 20,
+                            ),
+                          ),
+                        ),
+                        const Expanded(
+                          child: Column(
+                            children: [
+                              Text(
+                                'Share Location',
+                                textAlign: TextAlign.center,
+                                style: TextStyle(
+                                  color: Colors.white,
+                                  fontSize: 18,
+                                  fontWeight: FontWeight.bold,
+                                ),
+                              ),
+                              SizedBox(height: 2),
+                              Text(
+                                'Send your live position',
+                                textAlign: TextAlign.center,
+                                style: TextStyle(
+                                  color: Colors.white70,
+                                  fontSize: 12,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                        const SizedBox(width: 36),
+                      ],
+                    ),
+                  ),
+                  Expanded(
+                    child: SingleChildScrollView(
+                      padding: const EdgeInsets.all(20),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          // Map placeholder
+                          Container(
+                            height: 180,
+                            width: double.infinity,
+                            decoration: BoxDecoration(
+                              color: const Color(0xFFE8F5E9),
+                              borderRadius: BorderRadius.circular(16),
+                              border: Border.all(
+                                color: const Color(0xFFC8E6C9),
+                              ),
+                            ),
+                            child: Stack(
+                              children: [
+                                Center(
+                                  child: Column(
+                                    mainAxisAlignment: MainAxisAlignment.center,
+                                    children: [
+                                      Container(
+                                        padding: const EdgeInsets.all(12),
+                                        decoration: BoxDecoration(
+                                          color: AppTheme.primaryColor
+                                              .withOpacity(0.15),
+                                          shape: BoxShape.circle,
+                                        ),
+                                        child: const Icon(
+                                          LucideIcons.mapPin,
+                                          color: AppTheme.primaryColor,
+                                          size: 32,
+                                        ),
+                                      ),
+                                      const SizedBox(height: 8),
+                                      Text(
+                                        _currentLocationName,
+                                        style: const TextStyle(
+                                          fontWeight: FontWeight.bold,
+                                          fontSize: 13,
+                                        ),
+                                      ),
+                                      Text(
+                                        'Accuracy: ±${_accuracy.toStringAsFixed(1)}m · Updated now',
+                                        style: const TextStyle(
+                                          color: AppTheme.textSecondary,
+                                          fontSize: 11,
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                                Positioned(
+                                  top: 12,
+                                  left: 12,
+                                  child: Container(
+                                    padding: const EdgeInsets.symmetric(
+                                      horizontal: 10,
+                                      vertical: 4,
+                                    ),
+                                    decoration: BoxDecoration(
+                                      color: AppTheme.primaryColor,
+                                      borderRadius: BorderRadius.circular(12),
+                                    ),
+                                    child: Row(
+                                      mainAxisSize: MainAxisSize.min,
+                                      children: const [
+                                        Icon(
+                                          LucideIcons.radio,
+                                          color: Colors.white,
+                                          size: 12,
+                                        ),
+                                        SizedBox(width: 4),
+                                        Text(
+                                          'LIVE',
+                                          style: TextStyle(
+                                            color: Colors.white,
+                                            fontSize: 10,
+                                            fontWeight: FontWeight.bold,
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                          const SizedBox(height: 20),
+                          // Current Location card
+                          Container(
+                            padding: const EdgeInsets.all(16),
+                            decoration: BoxDecoration(
+                              color: Colors.white,
+                              borderRadius: BorderRadius.circular(12),
+                              border: Border.all(
+                                color: const Color(0xFFE5E7EB),
+                              ),
+                            ),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Row(
+                                  children: [
+                                    const Icon(
+                                      LucideIcons.mapPin,
+                                      color: AppTheme.primaryColor,
+                                      size: 18,
+                                    ),
+                                    const SizedBox(width: 8),
+                                    const Text(
+                                      'Current Location',
+                                      style: TextStyle(
+                                        fontWeight: FontWeight.bold,
+                                        fontSize: 15,
+                                      ),
+                                    ),
+                                    const Spacer(),
+                                    GestureDetector(
+                                      onTap: _calibrateGPS,
+                                      child: Row(
+                                        children: const [
+                                          Icon(
+                                            LucideIcons.refreshCw,
+                                            color: AppTheme.primaryColor,
+                                            size: 14,
+                                          ),
+                                          SizedBox(width: 4),
+                                          Text(
+                                            'Refresh',
+                                            style: TextStyle(
+                                              color: AppTheme.primaryColor,
+                                              fontWeight: FontWeight.bold,
+                                              fontSize: 12,
+                                            ),
+                                          ),
+                                        ],
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                                const SizedBox(height: 16),
+                                Row(
+                                  mainAxisAlignment:
+                                      MainAxisAlignment.spaceBetween,
+                                  children: [
+                                    const Text(
+                                      'Latitude',
+                                      style: TextStyle(
+                                        color: AppTheme.textSecondary,
+                                        fontSize: 13,
+                                      ),
+                                    ),
+                                    Text(
+                                      '${_latitude.toStringAsFixed(4)}° ${_latitude >= 0 ? "N" : "S"}',
+                                      style: const TextStyle(
+                                        fontWeight: FontWeight.bold,
+                                        fontSize: 14,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                                const Divider(height: 20),
+                                Row(
+                                  mainAxisAlignment:
+                                      MainAxisAlignment.spaceBetween,
+                                  children: [
+                                    const Text(
+                                      'Longitude',
+                                      style: TextStyle(
+                                        color: AppTheme.textSecondary,
+                                        fontSize: 13,
+                                      ),
+                                    ),
+                                    Text(
+                                      '${_longitude.toStringAsFixed(4)}° ${_longitude >= 0 ? "E" : "W"}',
+                                      style: const TextStyle(
+                                        fontWeight: FontWeight.bold,
+                                        fontSize: 14,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                                const SizedBox(height: 12),
+                                Row(
+                                  children: [
+                                    const Icon(
+                                      LucideIcons.mapPin,
+                                      size: 14,
+                                      color: AppTheme.textSecondary,
+                                    ),
+                                    const SizedBox(width: 6),
+                                    Expanded(
+                                      child: Text(
+                                        _currentLocationName,
+                                        style: const TextStyle(
+                                          color: AppTheme.textSecondary,
+                                          fontSize: 12,
+                                        ),
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ],
+                            ),
+                          ),
 
-                    // GPS toggle
-                    Container(padding: const EdgeInsets.all(14), decoration: BoxDecoration(border: Border.all(color: const Color(0xFFE5E7EB)), borderRadius: BorderRadius.circular(12)), child: Row(children: [
-                      const Icon(LucideIcons.navigation, color: AppTheme.primaryColor, size: 18),
-                      const SizedBox(width: 10),
-                      const Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [Text('Include GPS Coordinates', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13)), Text('Exact lat/long in message', style: TextStyle(color: AppTheme.textSecondary, fontSize: 11))])),
-                      Switch(value: includeGps, onChanged: (v) => setModalState(() => includeGps = v), activeColor: AppTheme.primaryColor),
-                    ])),
-                    const SizedBox(height: 24),
-                    // Share button
-                    SizedBox(width: double.infinity, child: ElevatedButton(
-                      style: ElevatedButton.styleFrom(backgroundColor: AppTheme.primaryColor, padding: const EdgeInsets.symmetric(vertical: 16), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)), elevation: 0),
-                      onPressed: () {
-                        Navigator.pop(context);
-                        final msg = includeGps
-                            ? 'I\'m sharing my live location via EAWS:\n📍 $_currentLocationName\nLat: ${_latitude.toStringAsFixed(4)}°, Lon: ${_longitude.toStringAsFixed(4)}°\nhttps://maps.google.com/?q=$_latitude,$_longitude'
-                            : 'I\'m sharing my location via EAWS:\n📍 $_currentLocationName';
-                        Share.share(msg);
-                      },
-                      child: Row(mainAxisAlignment: MainAxisAlignment.center, children: const [Icon(LucideIcons.share2, color: Colors.white, size: 18), SizedBox(width: 8), Text('Share My Location', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16, color: Colors.white))]),
-                    )),
-                  ])),
-                ),
-              ],
-            ),
-          );
-        });
+                          // GPS toggle
+                          Container(
+                            padding: const EdgeInsets.all(14),
+                            decoration: BoxDecoration(
+                              border: Border.all(
+                                color: const Color(0xFFE5E7EB),
+                              ),
+                              borderRadius: BorderRadius.circular(12),
+                            ),
+                            child: Row(
+                              children: [
+                                const Icon(
+                                  LucideIcons.navigation,
+                                  color: AppTheme.primaryColor,
+                                  size: 18,
+                                ),
+                                const SizedBox(width: 10),
+                                const Expanded(
+                                  child: Column(
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.start,
+                                    children: [
+                                      Text(
+                                        'Include GPS Coordinates',
+                                        style: TextStyle(
+                                          fontWeight: FontWeight.bold,
+                                          fontSize: 13,
+                                        ),
+                                      ),
+                                      Text(
+                                        'Exact lat/long in message',
+                                        style: TextStyle(
+                                          color: AppTheme.textSecondary,
+                                          fontSize: 11,
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                                Switch(
+                                  value: includeGps,
+                                  onChanged: (v) =>
+                                      setModalState(() => includeGps = v),
+                                  activeColor: AppTheme.primaryColor,
+                                ),
+                              ],
+                            ),
+                          ),
+                          const SizedBox(height: 24),
+                          // Share button
+                          SizedBox(
+                            width: double.infinity,
+                            child: ElevatedButton(
+                              style: ElevatedButton.styleFrom(
+                                backgroundColor: AppTheme.primaryColor,
+                                padding: const EdgeInsets.symmetric(
+                                  vertical: 16,
+                                ),
+                                shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(12),
+                                ),
+                                elevation: 0,
+                              ),
+                              onPressed: () {
+                                Navigator.pop(context);
+                                final msg = includeGps
+                                    ? 'I\'m sharing my live location via EAWS:\n📍 $_currentLocationName\nLat: ${_latitude.toStringAsFixed(4)}°, Lon: ${_longitude.toStringAsFixed(4)}°\nhttps://maps.google.com/?q=$_latitude,$_longitude'
+                                    : 'I\'m sharing my location via EAWS:\n📍 $_currentLocationName';
+                                Share.share(msg);
+                              },
+                              child: Row(
+                                mainAxisAlignment: MainAxisAlignment.center,
+                                children: const [
+                                  Icon(
+                                    LucideIcons.share2,
+                                    color: Colors.white,
+                                    size: 18,
+                                  ),
+                                  SizedBox(width: 8),
+                                  Text(
+                                    'Share My Location',
+                                    style: TextStyle(
+                                      fontWeight: FontWeight.bold,
+                                      fontSize: 16,
+                                      color: Colors.white,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            );
+          },
+        );
       },
     );
   }
 
   // Interactive Action: Emergency Contacts Modal Sheet
   void _showEmergencyContactsSheet() {
-
     showModalBottomSheet(
       context: context,
       isScrollControlled: true,
@@ -565,17 +915,27 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
           builder: (context, setModalState) {
             Future<void> pickContact() async {
               if (_contacts.length >= 5) {
-                ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Maximum 5 contacts allowed'), backgroundColor: AppTheme.warningColor));
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(
+                    content: Text('Maximum 5 contacts allowed'),
+                    backgroundColor: AppTheme.warningColor,
+                  ),
+                );
                 return;
               }
               try {
-                final permissionStatus = await FlutterContacts.permissions.request(PermissionType.readWrite);
+                final permissionStatus = await FlutterContacts.permissions
+                    .request(PermissionType.readWrite);
                 if (permissionStatus == PermissionStatus.granted) {
                   // showPicker returns a contact ID (String?), not a Contact
-                  final String? contactId = await FlutterContacts.native.showPicker();
+                  final String? contactId = await FlutterContacts.native
+                      .showPicker();
                   if (contactId != null) {
                     // Fetch the full contact with phone numbers
-                    final Contact? contact = await FlutterContacts.get(contactId, properties: {ContactProperty.phone});
+                    final Contact? contact = await FlutterContacts.get(
+                      contactId,
+                      properties: {ContactProperty.phone},
+                    );
                     if (contact == null) return;
 
                     // Try to get phone number
@@ -584,23 +944,42 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                       phone = contact.phones.first.number;
                     }
                     if (phone.isEmpty) {
-                      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Selected contact has no phone number'), backgroundColor: AppTheme.errorColor));
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(
+                          content: Text('Selected contact has no phone number'),
+                          backgroundColor: AppTheme.errorColor,
+                        ),
+                      );
                       return;
                     }
-                    
+
                     String name = contact.displayName ?? 'Unknown';
                     if (name.isEmpty) name = 'Unknown';
-                    String initials = name.trim().split(' ').map((e) => e.isNotEmpty ? e[0].toUpperCase() : '').take(2).join();
+                    String initials = name
+                        .trim()
+                        .split(' ')
+                        .map((e) => e.isNotEmpty ? e[0].toUpperCase() : '')
+                        .take(2)
+                        .join();
                     if (initials.isEmpty) initials = '?';
-                    
+
                     setModalState(() {
-                      _contacts.add({'name': name, 'phone': phone, 'initials': initials});
+                      _contacts.add({
+                        'name': name,
+                        'phone': phone,
+                        'initials': initials,
+                      });
                     });
                     setState(() {}); // Update the home screen count
                     _saveContacts(); // Persist to disk
                   }
                 } else {
-                  ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Contacts permission denied'), backgroundColor: AppTheme.errorColor));
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(
+                      content: Text('Contacts permission denied'),
+                      backgroundColor: AppTheme.errorColor,
+                    ),
+                  );
                 }
               } catch (e) {
                 print('Error picking contact: $e');
@@ -609,145 +988,401 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
 
             return Container(
               height: MediaQuery.of(context).size.height * 0.9,
-              decoration: const BoxDecoration(color: Color(0xFFF6F7F9), borderRadius: BorderRadius.vertical(top: Radius.circular(24))),
+              decoration: const BoxDecoration(
+                color: Color(0xFFF6F7F9),
+                borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+              ),
               child: Column(
                 children: [
                   // White Header
                   Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 20),
-                    decoration: const BoxDecoration(color: Colors.white, borderRadius: BorderRadius.vertical(top: Radius.circular(24))),
-                    child: Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
-                      InkWell(onTap: () => Navigator.pop(context), child: const Icon(LucideIcons.chevronLeft, color: Colors.black, size: 24)),
-                      const Text('SMS Contacts', style: TextStyle(color: Colors.black, fontSize: 18, fontWeight: FontWeight.bold)),
-                      GestureDetector(onTap: pickContact, child: const Icon(LucideIcons.userPlus, color: AppTheme.primaryColor, size: 24)),
-                    ]),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 16,
+                      vertical: 20,
+                    ),
+                    decoration: const BoxDecoration(
+                      color: Colors.white,
+                      borderRadius: BorderRadius.vertical(
+                        top: Radius.circular(24),
+                      ),
+                    ),
+                    child: Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        InkWell(
+                          onTap: () => Navigator.pop(context),
+                          child: const Icon(
+                            LucideIcons.chevronLeft,
+                            color: Colors.black,
+                            size: 24,
+                          ),
+                        ),
+                        const Text(
+                          'SMS Contacts',
+                          style: TextStyle(
+                            color: Colors.black,
+                            fontSize: 18,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                        GestureDetector(
+                          onTap: pickContact,
+                          child: const Icon(
+                            LucideIcons.userPlus,
+                            color: AppTheme.primaryColor,
+                            size: 24,
+                          ),
+                        ),
+                      ],
+                    ),
                   ),
                   Expanded(
-                    child: SingleChildScrollView(padding: const EdgeInsets.all(20), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                      Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-                        decoration: BoxDecoration(color: const Color(0xFFF3F4F6), borderRadius: BorderRadius.circular(20)),
-                        child: Text('${_contacts.length}/5 Saved', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 12, color: AppTheme.textSecondary)),
-                      ),
-                      const SizedBox(height: 24),
-                      Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
-                        const Text('EMERGENCY SMS CONTACTS', style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: AppTheme.textSecondary, letterSpacing: 1.0)),
-                      ]),
-                      const SizedBox(height: 12),
-                      
-                      if (_contacts.isNotEmpty)
-                        Container(
-                          decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(16), border: Border.all(color: const Color(0xFFE5E7EB))),
-                          child: Column(
-                            children: _contacts.asMap().entries.map((entry) {
-                              int idx = entry.key;
-                              var c = entry.value;
-                              return Column(
-                                children: [
-                                  Padding(
-                                    padding: const EdgeInsets.all(16),
-                                    child: Row(children: [
-                                      Container(width: 44, height: 44, decoration: const BoxDecoration(color: AppTheme.primaryColor, shape: BoxShape.circle),
-                                        child: Center(child: Text(c['initials'] as String, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 15)))),
-                                      const SizedBox(width: 16),
-                                      Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                                        Text(c['name'] as String, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 15, color: Colors.black)),
-                                        const SizedBox(height: 4),
-                                        Text(c['phone'] as String, style: const TextStyle(color: AppTheme.textSecondary, fontSize: 13)),
-                                      ])),
-                                      GestureDetector(
-                                        onTap: () {
-                                          HapticFeedback.lightImpact();
-                                          setModalState(() {
-                                            _contacts.removeAt(idx);
-                                          });
-                                          setState(() {});
-                                          _saveContacts(); // Persist to disk
-                                        },
-                                        child: const Icon(LucideIcons.trash2, color: Color(0xFFD1D5DB), size: 20),
+                    child: SingleChildScrollView(
+                      padding: const EdgeInsets.all(20),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Container(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 12,
+                              vertical: 6,
+                            ),
+                            decoration: BoxDecoration(
+                              color: const Color(0xFFF3F4F6),
+                              borderRadius: BorderRadius.circular(20),
+                            ),
+                            child: Text(
+                              '${_contacts.length}/5 Saved',
+                              style: const TextStyle(
+                                fontWeight: FontWeight.bold,
+                                fontSize: 12,
+                                color: AppTheme.textSecondary,
+                              ),
+                            ),
+                          ),
+                          const SizedBox(height: 24),
+                          Row(
+                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                            children: [
+                              const Text(
+                                'EMERGENCY SMS CONTACTS',
+                                style: TextStyle(
+                                  fontSize: 11,
+                                  fontWeight: FontWeight.bold,
+                                  color: AppTheme.textSecondary,
+                                  letterSpacing: 1.0,
+                                ),
+                              ),
+                            ],
+                          ),
+                          const SizedBox(height: 12),
+
+                          if (_contacts.isNotEmpty)
+                            Container(
+                              decoration: BoxDecoration(
+                                color: Colors.white,
+                                borderRadius: BorderRadius.circular(16),
+                                border: Border.all(
+                                  color: const Color(0xFFE5E7EB),
+                                ),
+                              ),
+                              child: Column(
+                                children: _contacts.asMap().entries.map((
+                                  entry,
+                                ) {
+                                  int idx = entry.key;
+                                  var c = entry.value;
+                                  return Column(
+                                    children: [
+                                      Padding(
+                                        padding: const EdgeInsets.all(16),
+                                        child: Row(
+                                          children: [
+                                            Container(
+                                              width: 44,
+                                              height: 44,
+                                              decoration: const BoxDecoration(
+                                                color: AppTheme.primaryColor,
+                                                shape: BoxShape.circle,
+                                              ),
+                                              child: Center(
+                                                child: Text(
+                                                  c['initials'] as String,
+                                                  style: const TextStyle(
+                                                    color: Colors.white,
+                                                    fontWeight: FontWeight.bold,
+                                                    fontSize: 15,
+                                                  ),
+                                                ),
+                                              ),
+                                            ),
+                                            const SizedBox(width: 16),
+                                            Expanded(
+                                              child: Column(
+                                                crossAxisAlignment:
+                                                    CrossAxisAlignment.start,
+                                                children: [
+                                                  Text(
+                                                    c['name'] as String,
+                                                    style: const TextStyle(
+                                                      fontWeight:
+                                                          FontWeight.bold,
+                                                      fontSize: 15,
+                                                      color: Colors.black,
+                                                    ),
+                                                  ),
+                                                  const SizedBox(height: 4),
+                                                  Text(
+                                                    c['phone'] as String,
+                                                    style: const TextStyle(
+                                                      color: AppTheme
+                                                          .textSecondary,
+                                                      fontSize: 13,
+                                                    ),
+                                                  ),
+                                                ],
+                                              ),
+                                            ),
+                                            GestureDetector(
+                                              onTap: () {
+                                                HapticFeedback.lightImpact();
+                                                setModalState(() {
+                                                  _contacts.removeAt(idx);
+                                                });
+                                                setState(() {});
+                                                _saveContacts(); // Persist to disk
+                                              },
+                                              child: const Icon(
+                                                LucideIcons.trash2,
+                                                color: Color(0xFFD1D5DB),
+                                                size: 20,
+                                              ),
+                                            ),
+                                          ],
+                                        ),
                                       ),
-                                    ]),
-                                  ),
-                                  if (idx != _contacts.length - 1) const Divider(height: 1, indent: 76, color: Color(0xFFF3F4F6)),
-                                ],
-                              );
-                            }).toList(),
-                          ),
-                        ),
-                      if (_contacts.isEmpty)
-                         Container(
-                          padding: const EdgeInsets.all(32),
-                          decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(16), border: Border.all(color: const Color(0xFFE5E7EB))),
-                          child: Center(child: Column(children: [const Icon(LucideIcons.users, size: 40, color: Color(0xFFD1D5DB)), const SizedBox(height: 12), const Text('No contacts added', style: TextStyle(color: AppTheme.textSecondary))])),
-                        ),
-                      const SizedBox(height: 24),
-                      GestureDetector(
-                        onTap: pickContact,
-                        child: Container(
-                          width: double.infinity, padding: const EdgeInsets.symmetric(vertical: 24),
-                          decoration: BoxDecoration(color: Colors.white, border: Border.all(color: const Color(0xFFE5E7EB), width: 1.5), borderRadius: BorderRadius.circular(16)),
-                          child: Column(mainAxisAlignment: MainAxisAlignment.center, children: const [
-                            Icon(LucideIcons.userPlus, color: AppTheme.primaryColor, size: 28),
-                            SizedBox(height: 12),
-                            Text('Add Emergency Contact', style: TextStyle(color: Colors.black, fontWeight: FontWeight.bold, fontSize: 15)),
-                          ]),
-                        ),
-                      ),
-                      const SizedBox(height: 32),
-                      const Text('SMS TEST', style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: AppTheme.textSecondary, letterSpacing: 1.0)),
-                      const SizedBox(height: 12),
-                      Container(
-                        padding: const EdgeInsets.all(16),
-                        decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(16), border: Border.all(color: const Color(0xFFE5E7EB))),
-                        child: Row(children: [
-                          Container(padding: const EdgeInsets.all(12), decoration: const BoxDecoration(color: Color(0xFFFEF2F2), borderRadius: BorderRadius.all(Radius.circular(12))), child: const Icon(LucideIcons.send, color: AppTheme.primaryColor, size: 20)),
-                          const SizedBox(width: 16),
-                          Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: const [
-                            Text('Send Test SMS', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 15, color: Colors.black)),
-                            SizedBox(height: 4),
-                            Text('Verify contacts receive alerts', style: TextStyle(color: AppTheme.textSecondary, fontSize: 13)),
-                          ])),
+                                      if (idx != _contacts.length - 1)
+                                        const Divider(
+                                          height: 1,
+                                          indent: 76,
+                                          color: Color(0xFFF3F4F6),
+                                        ),
+                                    ],
+                                  );
+                                }).toList(),
+                              ),
+                            ),
+                          if (_contacts.isEmpty)
+                            Container(
+                              padding: const EdgeInsets.all(32),
+                              decoration: BoxDecoration(
+                                color: Colors.white,
+                                borderRadius: BorderRadius.circular(16),
+                                border: Border.all(
+                                  color: const Color(0xFFE5E7EB),
+                                ),
+                              ),
+                              child: Center(
+                                child: Column(
+                                  children: [
+                                    const Icon(
+                                      LucideIcons.users,
+                                      size: 40,
+                                      color: Color(0xFFD1D5DB),
+                                    ),
+                                    const SizedBox(height: 12),
+                                    const Text(
+                                      'No contacts added',
+                                      style: TextStyle(
+                                        color: AppTheme.textSecondary,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ),
+                          const SizedBox(height: 24),
                           GestureDetector(
-                            onTap: () async {
-                              HapticFeedback.mediumImpact();
-                              if (_contacts.isEmpty) {
-                                ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('No contacts to test'), backgroundColor: AppTheme.errorColor));
-                                return;
-                              }
-                              String separator = Platform.isAndroid ? ';' : ',';
-                              final nums = _contacts.map((e) => e['phone']).join(separator);
-                              final encodedBody = Uri.encodeComponent('[EAWS TEST] This is a test emergency message from the EAWS app. You are listed as an emergency contact.');
-                              
-                              // iOS requires &body= when multiple comma-separated numbers are present
-                              String bodyPrefix = Platform.isIOS ? '&body=' : '?body=';
-                              final String urlString = 'sms:$nums$bodyPrefix$encodedBody';
-                              
-                              final smsUri = Uri.parse(urlString);
-                              if (await canLaunchUrl(smsUri)) {
-                                await launchUrl(smsUri);
-                              } else {
-                                ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Could not open SMS app'), backgroundColor: AppTheme.errorColor));
-                              }
-                            },
-                            child: Container(padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8), decoration: BoxDecoration(border: Border.all(color: AppTheme.primaryColor), borderRadius: BorderRadius.circular(8)), child: const Text('Test', style: TextStyle(color: AppTheme.primaryColor, fontWeight: FontWeight.bold, fontSize: 13))),
+                            onTap: pickContact,
+                            child: Container(
+                              width: double.infinity,
+                              padding: const EdgeInsets.symmetric(vertical: 24),
+                              decoration: BoxDecoration(
+                                color: Colors.white,
+                                border: Border.all(
+                                  color: const Color(0xFFE5E7EB),
+                                  width: 1.5,
+                                ),
+                                borderRadius: BorderRadius.circular(16),
+                              ),
+                              child: Column(
+                                mainAxisAlignment: MainAxisAlignment.center,
+                                children: const [
+                                  Icon(
+                                    LucideIcons.userPlus,
+                                    color: AppTheme.primaryColor,
+                                    size: 28,
+                                  ),
+                                  SizedBox(height: 12),
+                                  Text(
+                                    'Add Emergency Contact',
+                                    style: TextStyle(
+                                      color: Colors.black,
+                                      fontWeight: FontWeight.bold,
+                                      fontSize: 15,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
                           ),
-                        ]),
+                          const SizedBox(height: 32),
+                          const Text(
+                            'SMS TEST',
+                            style: TextStyle(
+                              fontSize: 11,
+                              fontWeight: FontWeight.bold,
+                              color: AppTheme.textSecondary,
+                              letterSpacing: 1.0,
+                            ),
+                          ),
+                          const SizedBox(height: 12),
+                          Container(
+                            padding: const EdgeInsets.all(16),
+                            decoration: BoxDecoration(
+                              color: Colors.white,
+                              borderRadius: BorderRadius.circular(16),
+                              border: Border.all(
+                                color: const Color(0xFFE5E7EB),
+                              ),
+                            ),
+                            child: Row(
+                              children: [
+                                Container(
+                                  padding: const EdgeInsets.all(12),
+                                  decoration: const BoxDecoration(
+                                    color: Color(0xFFFEF2F2),
+                                    borderRadius: BorderRadius.all(
+                                      Radius.circular(12),
+                                    ),
+                                  ),
+                                  child: const Icon(
+                                    LucideIcons.send,
+                                    color: AppTheme.primaryColor,
+                                    size: 20,
+                                  ),
+                                ),
+                                const SizedBox(width: 16),
+                                Expanded(
+                                  child: Column(
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.start,
+                                    children: const [
+                                      Text(
+                                        'Send Test SMS',
+                                        style: TextStyle(
+                                          fontWeight: FontWeight.bold,
+                                          fontSize: 15,
+                                          color: Colors.black,
+                                        ),
+                                      ),
+                                      SizedBox(height: 4),
+                                      Text(
+                                        'Preview only · no SMS sent',
+                                        style: TextStyle(
+                                          color: AppTheme.textSecondary,
+                                          fontSize: 13,
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                                GestureDetector(
+                                  onTap: () {
+                                    HapticFeedback.mediumImpact();
+                                    ScaffoldMessenger.of(context).showSnackBar(
+                                      const SnackBar(
+                                        content: Text(
+                                          'TEST MODE: SMS delivery is not configured; no message was sent.',
+                                        ),
+                                        backgroundColor: AppTheme.warningColor,
+                                      ),
+                                    );
+                                  },
+                                  child: Container(
+                                    padding: const EdgeInsets.symmetric(
+                                      horizontal: 16,
+                                      vertical: 8,
+                                    ),
+                                    decoration: BoxDecoration(
+                                      border: Border.all(
+                                        color: AppTheme.primaryColor,
+                                      ),
+                                      borderRadius: BorderRadius.circular(8),
+                                    ),
+                                    child: const Text(
+                                      'Preview',
+                                      style: TextStyle(
+                                        color: AppTheme.primaryColor,
+                                        fontWeight: FontWeight.bold,
+                                        fontSize: 13,
+                                      ),
+                                    ),
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                          const SizedBox(height: 32),
+                          SizedBox(
+                            width: double.infinity,
+                            child: ElevatedButton(
+                              style: ElevatedButton.styleFrom(
+                                backgroundColor: AppTheme.primaryColor,
+                                padding: const EdgeInsets.symmetric(
+                                  vertical: 18,
+                                ),
+                                shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(16),
+                                ),
+                                elevation: 0,
+                              ),
+                              onPressed: () {
+                                Navigator.pop(context);
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  const SnackBar(
+                                    content: Text(
+                                      'Contacts saved successfully!',
+                                    ),
+                                    backgroundColor: AppTheme.successColor,
+                                  ),
+                                );
+                              },
+                              child: Row(
+                                mainAxisAlignment: MainAxisAlignment.center,
+                                children: const [
+                                  Icon(
+                                    LucideIcons.checkCircle,
+                                    color: Colors.white,
+                                    size: 20,
+                                  ),
+                                  SizedBox(width: 8),
+                                  Text(
+                                    'Save Contacts',
+                                    style: TextStyle(
+                                      fontWeight: FontWeight.bold,
+                                      fontSize: 16,
+                                      color: Colors.white,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ),
+                          const SizedBox(height: 24),
+                        ],
                       ),
-                      const SizedBox(height: 32),
-                      SizedBox(width: double.infinity, child: ElevatedButton(
-                        style: ElevatedButton.styleFrom(backgroundColor: AppTheme.primaryColor, padding: const EdgeInsets.symmetric(vertical: 18), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)), elevation: 0),
-                        onPressed: () {
-                          Navigator.pop(context);
-                          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Contacts saved successfully!'), backgroundColor: AppTheme.successColor));
-                        },
-                        child: Row(mainAxisAlignment: MainAxisAlignment.center, children: const [
-                          Icon(LucideIcons.checkCircle, color: Colors.white, size: 20),
-                          SizedBox(width: 8),
-                          Text('Save Contacts', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16, color: Colors.white)),
-                        ]),
-                      )),
-                      const SizedBox(height: 24),
-                    ])),
+                    ),
                   ),
                 ],
               ),
@@ -760,101 +1395,280 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
 
   // Interactive Action: Offline SMS Sheet
   void _showOfflineSmsSheet() {
-    bool includeGps = true;
-    bool includeProfile = true;
-    final smsBody = '[EAWS SOS] User needs emergency help. Location: ${_latitude.toStringAsFixed(4)}°N, ${_longitude.toStringAsFixed(4)}°W.';
+    final smsBody =
+        'TEST ONLY: SOS SMS preview. Location: ${_locationLoaded ? _currentLocationName : 'unavailable'}.';
 
     showModalBottomSheet(
       context: context,
       isScrollControlled: true,
       backgroundColor: Colors.white,
-      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(24))),
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+      ),
       builder: (context) {
-        return StatefulBuilder(builder: (context, setModalState) {
-          return Container(
-            height: MediaQuery.of(context).size.height * 0.85,
-            decoration: const BoxDecoration(color: Colors.white, borderRadius: BorderRadius.vertical(top: Radius.circular(24))),
-            child: Column(children: [
-              Container(
-                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 20),
-                decoration: const BoxDecoration(color: AppTheme.primaryColor, borderRadius: BorderRadius.vertical(top: Radius.circular(24))),
-                child: Row(children: [
-                  InkWell(onTap: () => Navigator.pop(context), child: Container(padding: const EdgeInsets.all(8), decoration: BoxDecoration(color: Colors.white.withOpacity(0.2), shape: BoxShape.circle), child: const Icon(LucideIcons.chevronLeft, color: Colors.white, size: 20))),
-                  const Expanded(child: Text('Offline SMS', textAlign: TextAlign.center, style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold))),
-                  const SizedBox(width: 36),
-                ]),
+        return StatefulBuilder(
+          builder: (context, setModalState) {
+            return Container(
+              height: MediaQuery.of(context).size.height * 0.85,
+              decoration: const BoxDecoration(
+                color: Colors.white,
+                borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
               ),
-              Expanded(child: SingleChildScrollView(padding: const EdgeInsets.all(20), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                Container(
-                  padding: const EdgeInsets.all(14),
-                  decoration: BoxDecoration(color: const Color(0xFFFFEBEE), borderRadius: BorderRadius.circular(12)),
-                  child: Row(children: [
-                    const Icon(LucideIcons.wifiOff, color: AppTheme.primaryColor, size: 20),
-                    const SizedBox(width: 10),
-                    const Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                      Text('No Internet Detected', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13, color: AppTheme.primaryColor)),
-                      Text('SMS fallback mode is active', style: TextStyle(fontSize: 11, color: AppTheme.textSecondary)),
-                    ])),
-                  ]),
-                ),
-                const SizedBox(height: 20),
-                const Text('SMS MESSAGE', style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: AppTheme.textSecondary, letterSpacing: 1.0)),
-                const SizedBox(height: 10),
-                Container(
-                  padding: const EdgeInsets.all(16),
-                  decoration: BoxDecoration(color: const Color(0xFFF9FAFB), borderRadius: BorderRadius.circular(12), border: Border.all(color: const Color(0xFFE5E7EB))),
-                  child: Text(smsBody, style: const TextStyle(fontSize: 13, height: 1.5, fontWeight: FontWeight.w500)),
-                ),
-                const SizedBox(height: 20),
-                const Text('SENDING TO', style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: AppTheme.textSecondary, letterSpacing: 1.0)),
-                const SizedBox(height: 12),
-                ..._contacts.map((r) => Padding(
-                  padding: const EdgeInsets.only(bottom: 10),
-                  child: Row(children: [
-                    Container(width: 40, height: 40, decoration: BoxDecoration(color: AppTheme.primaryColor.withOpacity(0.1), borderRadius: BorderRadius.circular(10)),
-                      child: Center(child: Text(r['initials'] as String, style: const TextStyle(color: AppTheme.primaryColor, fontWeight: FontWeight.bold, fontSize: 14)))),
-                    const SizedBox(width: 12),
-                    Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                      Text(r['name'] as String, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13)),
-                      Text(r['phone'] as String, style: const TextStyle(color: AppTheme.textSecondary, fontSize: 11)),
-                    ])),
-                  ]),
-                )),
-                const SizedBox(height: 20),
-                SizedBox(width: double.infinity, child: ElevatedButton(
-                  style: ElevatedButton.styleFrom(backgroundColor: AppTheme.primaryColor, padding: const EdgeInsets.symmetric(vertical: 16), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)), elevation: 0),
-                  onPressed: () {
-                    String separator = Platform.isAndroid ? ';' : ',';
-                    final nums = _contacts.map((e) => e['phone']).join(separator);
-                    final encodedBody = Uri.encodeComponent(smsBody);
-                    
-                    String bodyPrefix = Platform.isIOS ? '&body=' : '?body=';
-                    final String urlString = 'sms:$nums$bodyPrefix$encodedBody';
-                    
-                    launchUrl(Uri.parse(urlString));
-                  },
-                  child: Row(mainAxisAlignment: MainAxisAlignment.center, children: const [
-                    Icon(LucideIcons.send, color: Colors.white, size: 18),
-                    SizedBox(width: 8),
-                    Text('Send SOS via SMS', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16, color: Colors.white)),
-                  ]),
-                )),
-              ]))),
-            ]),
-          );
-        });
+              child: Column(
+                children: [
+                  Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 16,
+                      vertical: 20,
+                    ),
+                    decoration: const BoxDecoration(
+                      color: AppTheme.primaryColor,
+                      borderRadius: BorderRadius.vertical(
+                        top: Radius.circular(24),
+                      ),
+                    ),
+                    child: Row(
+                      children: [
+                        InkWell(
+                          onTap: () => Navigator.pop(context),
+                          child: Container(
+                            padding: const EdgeInsets.all(8),
+                            decoration: BoxDecoration(
+                              color: Colors.white.withOpacity(0.2),
+                              shape: BoxShape.circle,
+                            ),
+                            child: const Icon(
+                              LucideIcons.chevronLeft,
+                              color: Colors.white,
+                              size: 20,
+                            ),
+                          ),
+                        ),
+                        const Expanded(
+                          child: Text(
+                            'Offline SMS',
+                            textAlign: TextAlign.center,
+                            style: TextStyle(
+                              color: Colors.white,
+                              fontSize: 18,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 36),
+                      ],
+                    ),
+                  ),
+                  Expanded(
+                    child: SingleChildScrollView(
+                      padding: const EdgeInsets.all(20),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Container(
+                            padding: const EdgeInsets.all(14),
+                            decoration: BoxDecoration(
+                              color: const Color(0xFFFFEBEE),
+                              borderRadius: BorderRadius.circular(12),
+                            ),
+                            child: Row(
+                              children: [
+                                const Icon(
+                                  LucideIcons.wifiOff,
+                                  color: AppTheme.primaryColor,
+                                  size: 20,
+                                ),
+                                const SizedBox(width: 10),
+                                const Expanded(
+                                  child: Column(
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.start,
+                                    children: [
+                                      Text(
+                                        'No Internet Detected',
+                                        style: TextStyle(
+                                          fontWeight: FontWeight.bold,
+                                          fontSize: 13,
+                                          color: AppTheme.primaryColor,
+                                        ),
+                                      ),
+                                      Text(
+                                        'Preview only. No SMS gateway is configured.',
+                                        style: TextStyle(
+                                          fontSize: 11,
+                                          color: AppTheme.textSecondary,
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                          const SizedBox(height: 20),
+                          const Text(
+                            'SMS MESSAGE',
+                            style: TextStyle(
+                              fontSize: 11,
+                              fontWeight: FontWeight.bold,
+                              color: AppTheme.textSecondary,
+                              letterSpacing: 1.0,
+                            ),
+                          ),
+                          const SizedBox(height: 10),
+                          Container(
+                            padding: const EdgeInsets.all(16),
+                            decoration: BoxDecoration(
+                              color: const Color(0xFFF9FAFB),
+                              borderRadius: BorderRadius.circular(12),
+                              border: Border.all(
+                                color: const Color(0xFFE5E7EB),
+                              ),
+                            ),
+                            child: Text(
+                              smsBody,
+                              style: const TextStyle(
+                                fontSize: 13,
+                                height: 1.5,
+                                fontWeight: FontWeight.w500,
+                              ),
+                            ),
+                          ),
+                          const SizedBox(height: 20),
+                          const Text(
+                            'SENDING TO',
+                            style: TextStyle(
+                              fontSize: 11,
+                              fontWeight: FontWeight.bold,
+                              color: AppTheme.textSecondary,
+                              letterSpacing: 1.0,
+                            ),
+                          ),
+                          const SizedBox(height: 12),
+                          ..._contacts.map(
+                            (r) => Padding(
+                              padding: const EdgeInsets.only(bottom: 10),
+                              child: Row(
+                                children: [
+                                  Container(
+                                    width: 40,
+                                    height: 40,
+                                    decoration: BoxDecoration(
+                                      color: AppTheme.primaryColor.withOpacity(
+                                        0.1,
+                                      ),
+                                      borderRadius: BorderRadius.circular(10),
+                                    ),
+                                    child: Center(
+                                      child: Text(
+                                        r['initials'] as String,
+                                        style: const TextStyle(
+                                          color: AppTheme.primaryColor,
+                                          fontWeight: FontWeight.bold,
+                                          fontSize: 14,
+                                        ),
+                                      ),
+                                    ),
+                                  ),
+                                  const SizedBox(width: 12),
+                                  Expanded(
+                                    child: Column(
+                                      crossAxisAlignment:
+                                          CrossAxisAlignment.start,
+                                      children: [
+                                        Text(
+                                          r['name'] as String,
+                                          style: const TextStyle(
+                                            fontWeight: FontWeight.bold,
+                                            fontSize: 13,
+                                          ),
+                                        ),
+                                        Text(
+                                          r['phone'] as String,
+                                          style: const TextStyle(
+                                            color: AppTheme.textSecondary,
+                                            fontSize: 11,
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ),
+                          const SizedBox(height: 20),
+                          SizedBox(
+                            width: double.infinity,
+                            child: ElevatedButton(
+                              style: ElevatedButton.styleFrom(
+                                backgroundColor: AppTheme.primaryColor,
+                                padding: const EdgeInsets.symmetric(
+                                  vertical: 16,
+                                ),
+                                shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(12),
+                                ),
+                                elevation: 0,
+                              ),
+                              onPressed: () {
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  const SnackBar(
+                                    content: Text(
+                                      'TEST MODE: no SMS was sent. Configure an isolated test gateway before exercising fallback.',
+                                    ),
+                                    backgroundColor: AppTheme.warningColor,
+                                  ),
+                                );
+                              },
+                              child: Row(
+                                mainAxisAlignment: MainAxisAlignment.center,
+                                children: const [
+                                  Icon(
+                                    LucideIcons.send,
+                                    color: Colors.white,
+                                    size: 18,
+                                  ),
+                                  SizedBox(width: 8),
+                                  Text(
+                                    'Send SOS via SMS',
+                                    style: TextStyle(
+                                      fontWeight: FontWeight.bold,
+                                      fontSize: 16,
+                                      color: Colors.white,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            );
+          },
+        );
       },
     );
   }
 
   // Bell Notifications Sheet
   void _showNotificationsSheet() {
-    final systemAlerts = _activeAlerts.map((a) => {
-      'title': a.title,
-      'desc': a.description,
-      'time': a.minutesRemaining != null ? 'Impact in ${a.minutesRemaining}m' : 'Active Now',
-      'warning': a.severity == AlertSeverity.warning,
-    }).toList();
+    final systemAlerts = _activeAlerts
+        .map(
+          (a) => {
+            'title': a.title,
+            'desc': a.description,
+            'time': a.minutesRemaining != null
+                ? 'Impact in ${a.minutesRemaining}m'
+                : 'Active Now',
+            'warning': a.severity == AlertSeverity.warning,
+          },
+        )
+        .toList();
 
     showModalBottomSheet(
       context: context,
@@ -876,11 +1690,18 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                 children: [
                   const Text(
                     'Regional Active Alerts',
-                    style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: AppTheme.textPrimary),
+                    style: TextStyle(
+                      fontSize: 18,
+                      fontWeight: FontWeight.bold,
+                      color: AppTheme.textPrimary,
+                    ),
                   ),
                   TextButton(
                     onPressed: () => Navigator.pop(context),
-                    child: const Text('Clear All', style: TextStyle(color: AppTheme.textSecondary)),
+                    child: const Text(
+                      'Clear All',
+                      style: TextStyle(color: AppTheme.textSecondary),
+                    ),
                   ),
                 ],
               ),
@@ -899,12 +1720,18 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                           Container(
                             padding: const EdgeInsets.all(8),
                             decoration: BoxDecoration(
-                              color: (item['warning'] as bool) ? AppTheme.warningColor.withOpacity(0.15) : Colors.blue.withOpacity(0.1),
+                              color: (item['warning'] as bool)
+                                  ? AppTheme.warningColor.withOpacity(0.15)
+                                  : Colors.blue.withOpacity(0.1),
                               shape: BoxShape.circle,
                             ),
                             child: Icon(
-                              (item['warning'] as bool) ? LucideIcons.alertTriangle : LucideIcons.info,
-                              color: (item['warning'] as bool) ? AppTheme.warningColor : Colors.blue,
+                              (item['warning'] as bool)
+                                  ? LucideIcons.alertTriangle
+                                  : LucideIcons.info,
+                              color: (item['warning'] as bool)
+                                  ? AppTheme.warningColor
+                                  : Colors.blue,
                               size: 18,
                             ),
                           ),
@@ -913,11 +1740,30 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                             child: Column(
                               crossAxisAlignment: CrossAxisAlignment.start,
                               children: [
-                                Text(item['title'] as String, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14)),
+                                Text(
+                                  item['title'] as String,
+                                  style: const TextStyle(
+                                    fontWeight: FontWeight.bold,
+                                    fontSize: 14,
+                                  ),
+                                ),
                                 const SizedBox(height: 4),
-                                Text(item['desc'] as String, style: const TextStyle(color: AppTheme.textSecondary, fontSize: 12, height: 1.3)),
+                                Text(
+                                  item['desc'] as String,
+                                  style: const TextStyle(
+                                    color: AppTheme.textSecondary,
+                                    fontSize: 12,
+                                    height: 1.3,
+                                  ),
+                                ),
                                 const SizedBox(height: 4),
-                                Text(item['time'] as String, style: const TextStyle(color: Color(0xFF9CA3AF), fontSize: 10)),
+                                Text(
+                                  item['time'] as String,
+                                  style: const TextStyle(
+                                    color: Color(0xFF9CA3AF),
+                                    fontSize: 10,
+                                  ),
+                                ),
                               ],
                             ),
                           ),
@@ -963,23 +1809,41 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
                             Container(
-                              width: 48, height: 5,
-                              decoration: BoxDecoration(color: Colors.grey[300], borderRadius: BorderRadius.circular(100)),
+                              width: 48,
+                              height: 5,
+                              decoration: BoxDecoration(
+                                color: Colors.grey[300],
+                                borderRadius: BorderRadius.circular(100),
+                              ),
                             ),
                             const SizedBox(height: 16),
-                            const Text('Safe Zone Directory', style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold)),
+                            const Text(
+                              'Safe Zone Directory',
+                              style: TextStyle(
+                                fontSize: 20,
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
                             const SizedBox(height: 4),
-                            Text('${_safeZones.where((z) => z.isOpen).length} shelters currently open near you',
-                                style: const TextStyle(color: AppTheme.textSecondary, fontSize: 13)),
+                            Text(
+                              '${_safeZones.where((z) => z.isOpen).length} shelters currently open near you',
+                              style: const TextStyle(
+                                color: AppTheme.textSecondary,
+                                fontSize: 13,
+                              ),
+                            ),
                           ],
                         ),
                         const Spacer(),
-                        IconButton(onPressed: () => Navigator.pop(context), icon: const Icon(LucideIcons.x)),
+                        IconButton(
+                          onPressed: () => Navigator.pop(context),
+                          icon: const Icon(LucideIcons.x),
+                        ),
                       ],
                     ),
                   ),
                   const SizedBox(height: 16),
-                  
+
                   // Full Google Map
                   Padding(
                     padding: const EdgeInsets.symmetric(horizontal: 24),
@@ -1010,7 +1874,9 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                                   : 'CLOSED',
                             ),
                             icon: BitmapDescriptor.defaultMarkerWithHue(
-                              zone.isOpen ? BitmapDescriptor.hueGreen : BitmapDescriptor.hueRed,
+                              zone.isOpen
+                                  ? BitmapDescriptor.hueGreen
+                                  : BitmapDescriptor.hueRed,
                             ),
                           );
                         }).toSet(),
@@ -1018,24 +1884,34 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                     ),
                   ),
                   const SizedBox(height: 20),
-                  
+
                   // Shelter directory list
                   const Padding(
                     padding: EdgeInsets.symmetric(horizontal: 24),
-                    child: Text('SHELTER DIRECTORY', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 11, color: AppTheme.textSecondary, letterSpacing: 1.1)),
+                    child: Text(
+                      'SHELTER DIRECTORY',
+                      style: TextStyle(
+                        fontWeight: FontWeight.bold,
+                        fontSize: 11,
+                        color: AppTheme.textSecondary,
+                        letterSpacing: 1.1,
+                      ),
+                    ),
                   ),
                   const SizedBox(height: 12),
-                  
+
                   Expanded(
                     child: ListView.separated(
                       controller: scrollController,
                       padding: const EdgeInsets.symmetric(horizontal: 24),
                       itemCount: _safeZones.length,
-                      separatorBuilder: (_, __) => const Divider(height: 1, color: Color(0xFFE5E7EB)),
+                      separatorBuilder: (_, __) =>
+                          const Divider(height: 1, color: Color(0xFFE5E7EB)),
                       itemBuilder: (context, i) {
                         final zone = _safeZones[i];
                         final distKm = zone.distanceFrom(_latitude, _longitude);
-                        final capacityText = zone.capacity != null && zone.currentCount != null
+                        final capacityText =
+                            zone.capacity != null && zone.currentCount != null
                             ? '${((zone.currentCount! / zone.capacity!) * 100).toStringAsFixed(0)}% full'
                             : 'Open';
                         return _buildShelterTile(zone, distKm, capacityText);
@@ -1078,7 +1954,9 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
             Container(
               padding: const EdgeInsets.all(10),
               decoration: BoxDecoration(
-                color: isOpen ? AppTheme.successColor.withOpacity(0.1) : AppTheme.errorColor.withOpacity(0.1),
+                color: isOpen
+                    ? AppTheme.successColor.withOpacity(0.1)
+                    : AppTheme.errorColor.withOpacity(0.1),
                 shape: BoxShape.circle,
               ),
               child: Icon(
@@ -1092,10 +1970,21 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text(zone.name, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14)),
+                  Text(
+                    zone.name,
+                    style: const TextStyle(
+                      fontWeight: FontWeight.bold,
+                      fontSize: 14,
+                    ),
+                  ),
                   const SizedBox(height: 2),
-                  Text('${distKm.toStringAsFixed(1)} km away • $detail',
-                      style: const TextStyle(color: AppTheme.textSecondary, fontSize: 12)),
+                  Text(
+                    '${distKm.toStringAsFixed(1)} km away • $detail',
+                    style: const TextStyle(
+                      color: AppTheme.textSecondary,
+                      fontSize: 12,
+                    ),
+                  ),
                 ],
               ),
             ),
@@ -1103,9 +1992,14 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
               mainAxisSize: MainAxisSize.min,
               children: [
                 Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 8,
+                    vertical: 4,
+                  ),
                   decoration: BoxDecoration(
-                    color: isOpen ? AppTheme.successColor.withOpacity(0.08) : AppTheme.errorColor.withOpacity(0.08),
+                    color: isOpen
+                        ? AppTheme.successColor.withOpacity(0.08)
+                        : AppTheme.errorColor.withOpacity(0.08),
                     borderRadius: BorderRadius.circular(100),
                   ),
                   child: Text(
@@ -1113,13 +2007,19 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                     style: TextStyle(
                       fontSize: 10,
                       fontWeight: FontWeight.bold,
-                      color: isOpen ? AppTheme.successColor : AppTheme.errorColor,
+                      color: isOpen
+                          ? AppTheme.successColor
+                          : AppTheme.errorColor,
                     ),
                   ),
                 ),
                 if (isOpen) ...[
                   const SizedBox(width: 6),
-                  const Icon(LucideIcons.chevronRight, color: AppTheme.textSecondary, size: 16),
+                  const Icon(
+                    LucideIcons.chevronRight,
+                    color: AppTheme.textSecondary,
+                    size: 16,
+                  ),
                 ],
               ],
             ),
@@ -1191,32 +2091,64 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                 ),
                 const SizedBox(width: 12),
                 Expanded(
-                  child: Text(alert.title,
-                      style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16, color: textColor)),
+                  child: Text(
+                    alert.title,
+                    style: TextStyle(
+                      fontWeight: FontWeight.bold,
+                      fontSize: 16,
+                      color: textColor,
+                    ),
+                  ),
                 ),
                 if (alert.severity == AlertSeverity.warning)
                   Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 8,
+                      vertical: 3,
+                    ),
                     decoration: BoxDecoration(
                       color: AppTheme.errorColor,
                       borderRadius: BorderRadius.circular(8),
                     ),
-                    child: const Text('URGENT',
-                        style: TextStyle(color: Colors.white, fontSize: 10, fontWeight: FontWeight.bold)),
+                    child: const Text(
+                      'URGENT',
+                      style: TextStyle(
+                        color: Colors.white,
+                        fontSize: 10,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
                   ),
               ],
             ),
             const SizedBox(height: 8),
-            Text(alert.description,
-                style: TextStyle(fontSize: 13, color: textColor.withOpacity(0.85))),
+            Text(
+              alert.description,
+              style: TextStyle(
+                fontSize: 13,
+                color: textColor.withOpacity(0.85),
+              ),
+            ),
             if (alert.minutesRemaining != null) ...[
               const SizedBox(height: 12),
               Row(
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
-                  Text('Time to impact', style: TextStyle(color: textColor.withOpacity(0.7), fontSize: 12)),
-                  Text('${alert.minutesRemaining} min',
-                      style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12, color: textColor)),
+                  Text(
+                    'Time to impact',
+                    style: TextStyle(
+                      color: textColor.withOpacity(0.7),
+                      fontSize: 12,
+                    ),
+                  ),
+                  Text(
+                    '${alert.minutesRemaining} min',
+                    style: TextStyle(
+                      fontWeight: FontWeight.bold,
+                      fontSize: 12,
+                      color: textColor,
+                    ),
+                  ),
                 ],
               ),
               const SizedBox(height: 8),
@@ -1230,8 +2162,14 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
             ],
             if (alert.checklist.isNotEmpty) ...[
               const SizedBox(height: 10),
-              Text('Tap for safety checklist →',
-                  style: TextStyle(color: iconColor, fontSize: 12, fontWeight: FontWeight.bold)),
+              Text(
+                'Tap for safety checklist →',
+                style: TextStyle(
+                  color: iconColor,
+                  fontSize: 12,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
             ],
           ],
         ),
@@ -1262,42 +2200,95 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                 children: [
                   Center(
                     child: Container(
-                      width: 48, height: 5,
-                      decoration: BoxDecoration(color: Colors.grey[300], borderRadius: BorderRadius.circular(100)),
+                      width: 48,
+                      height: 5,
+                      decoration: BoxDecoration(
+                        color: Colors.grey[300],
+                        borderRadius: BorderRadius.circular(100),
+                      ),
                     ),
                   ),
                   const SizedBox(height: 20),
-                  Text(alert.title, style: const TextStyle(fontSize: 22, fontWeight: FontWeight.bold)),
+                  Text(
+                    alert.title,
+                    style: const TextStyle(
+                      fontSize: 22,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
                   const SizedBox(height: 8),
-                  Text(alert.description, style: const TextStyle(fontSize: 15, color: AppTheme.textSecondary, height: 1.5)),
+                  Text(
+                    alert.description,
+                    style: const TextStyle(
+                      fontSize: 15,
+                      color: AppTheme.textSecondary,
+                      height: 1.5,
+                    ),
+                  ),
                   if (alert.checklist.isNotEmpty) ...[
                     const SizedBox(height: 24),
-                    const Text('SAFETY CHECKLIST', style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: AppTheme.textSecondary, letterSpacing: 1.1)),
-                    const SizedBox(height: 12),
-                    ...alert.checklist.asMap().entries.map((e) => Padding(
-                      padding: const EdgeInsets.only(bottom: 10),
-                      child: Row(
-                        children: [
-                          Container(
-                            width: 28, height: 28,
-                            decoration: BoxDecoration(color: AppTheme.primaryColor.withOpacity(0.1), shape: BoxShape.circle),
-                            child: Center(child: Text('${e.key + 1}', style: const TextStyle(fontWeight: FontWeight.bold, color: AppTheme.primaryColor, fontSize: 13))),
-                          ),
-                          const SizedBox(width: 12),
-                          Expanded(child: Text(e.value, style: const TextStyle(fontSize: 14))),
-                        ],
+                    const Text(
+                      'SAFETY CHECKLIST',
+                      style: TextStyle(
+                        fontSize: 11,
+                        fontWeight: FontWeight.bold,
+                        color: AppTheme.textSecondary,
+                        letterSpacing: 1.1,
                       ),
-                    )),
+                    ),
+                    const SizedBox(height: 12),
+                    ...alert.checklist.asMap().entries.map(
+                      (e) => Padding(
+                        padding: const EdgeInsets.only(bottom: 10),
+                        child: Row(
+                          children: [
+                            Container(
+                              width: 28,
+                              height: 28,
+                              decoration: BoxDecoration(
+                                color: AppTheme.primaryColor.withOpacity(0.1),
+                                shape: BoxShape.circle,
+                              ),
+                              child: Center(
+                                child: Text(
+                                  '${e.key + 1}',
+                                  style: const TextStyle(
+                                    fontWeight: FontWeight.bold,
+                                    color: AppTheme.primaryColor,
+                                    fontSize: 13,
+                                  ),
+                                ),
+                              ),
+                            ),
+                            const SizedBox(width: 12),
+                            Expanded(
+                              child: Text(
+                                e.value,
+                                style: const TextStyle(fontSize: 14),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
                   ],
                   const SizedBox(height: 24),
                   ElevatedButton(
                     style: ElevatedButton.styleFrom(
                       backgroundColor: AppTheme.primaryColor,
                       padding: const EdgeInsets.symmetric(vertical: 16),
-                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(12),
+                      ),
                     ),
                     onPressed: () => Navigator.pop(context),
-                    child: const Text('Understood', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+                    child: const Text(
+                      'Understood',
+                      style: TextStyle(
+                        fontWeight: FontWeight.bold,
+                        fontSize: 16,
+                      ),
+                    ),
                   ),
                 ],
               ),
@@ -1310,11 +2301,15 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
 
   @override
   Widget build(BuildContext context) {
-
-    final String userPhone = AuthService.instance.currentUserPhone ?? '+233 26 624 1278';
+    final String userPhone = AuthService.instance.currentUserPhone ?? '';
     // Clean formatted welcome label (phone number summary)
-    final String formattedUser = userPhone.length > 8 ? userPhone.substring(0, 7) + '...' : userPhone;
-    final String displayName = AuthService.instance.currentUserName ?? formattedUser;
+    final String formattedUser = userPhone.length > 8
+        ? userPhone.substring(0, 7) + '...'
+        : userPhone;
+    final String displayName = _demoMode
+        ? 'TEST Citizen'
+        : AuthService.instance.currentUserName ??
+              (formattedUser.isEmpty ? 'Citizen' : formattedUser);
 
     return Scaffold(
       backgroundColor: AppTheme.backgroundColor,
@@ -1330,7 +2325,6 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                   // Spacer height pushes content down so it sits perfectly below the fixed header,
                   // taking safe area padding into account.
                   SizedBox(height: MediaQuery.of(context).padding.top + 210),
-                  
 
                   // Bottom Form Body Content
                   Transform.translate(
@@ -1341,519 +2335,814 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
                           // Status Telemetry Banner Card
-                    Container(
-                      padding: const EdgeInsets.all(16),
-                      decoration: BoxDecoration(
-                        color: Colors.white,
-                        borderRadius: BorderRadius.circular(16),
-                        boxShadow: [
-                          BoxShadow(
-                            color: Colors.black.withOpacity(0.05),
-                            blurRadius: 10,
-                            offset: const Offset(0, 4),
-                          ),
-                        ],
-                      ),
-                      child: Column(
-                        children: [
-                          Row(
-                            children: [
-                              Container(
-                                padding: const EdgeInsets.all(8),
-                                decoration: BoxDecoration(
-                                  color: AppTheme.successColor.withOpacity(0.1),
-                                  shape: BoxShape.circle,
+                          Container(
+                            padding: const EdgeInsets.all(16),
+                            decoration: BoxDecoration(
+                              color: Colors.white,
+                              borderRadius: BorderRadius.circular(16),
+                              boxShadow: [
+                                BoxShadow(
+                                  color: Colors.black.withOpacity(0.05),
+                                  blurRadius: 10,
+                                  offset: const Offset(0, 4),
                                 ),
-                                child: ScaleTransition(
-                                  scale: Tween<double>(begin: 0.9, end: 1.1).animate(_pulseController),
-                                  child: const Icon(LucideIcons.checkCircle, color: AppTheme.successColor),
-                                ),
-                              ),
-                              const SizedBox(width: 12),
-                              Expanded(
-                                child: Column(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
+                              ],
+                            ),
+                            child: Column(
+                              children: [
+                                Row(
                                   children: [
-                                    const Text('All Zones Secure', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
-                                    const SizedBox(height: 4),
-                                    Text('GPS: ${_latitude.toStringAsFixed(4)}° ${_latitude >= 0 ? "N" : "S"}, ${_longitude.toStringAsFixed(4)}° ${_longitude >= 0 ? "E" : "W"} • ±${_accuracy.toStringAsFixed(0)}m', style: TextStyle(color: AppTheme.textSecondary, fontSize: 12)),
-                                  ],
-                                ),
-                              ),
-                            ],
-                          ),
-                          const SizedBox(height: 12),
-                          const Divider(),
-                          const SizedBox(height: 8),
-                          Row(
-                            children: [
-                              const Icon(LucideIcons.clock, size: 14, color: AppTheme.textSecondary),
-                              const SizedBox(width: 6),
-                              const Text('Last updated: just now', style: TextStyle(color: AppTheme.textSecondary, fontSize: 12)),
-                              const Spacer(),
-                              Container(
-                                width: 8, height: 8,
-                                decoration: BoxDecoration(
-                                  color: _isOffline ? AppTheme.errorColor : AppTheme.successColor,
-                                  shape: BoxShape.circle,
-                                ),
-                              ),
-                              const SizedBox(width: 6),
-                              Text(_isOffline ? 'Offline' : 'Online', style: TextStyle(color: _isOffline ? AppTheme.errorColor : AppTheme.successColor, fontSize: 12, fontWeight: FontWeight.bold)),
-                            ],
-                          )
-                        ],
-                      ),
-                    ),
-                    const SizedBox(height: 32),
-                    
-                    // Giant Hold-to-SOS emergency button
-                    Center(
-                      child: GestureDetector(
-                        onLongPressStart: (_) => _onSosHoldStart(),
-                        onLongPressEnd: (_) => _onSosHoldEnd(),
-                        child: Stack(
-                          alignment: Alignment.center,
-                          children: [
-                            // Sweeping outer border showing hold completion build-up
-                            SizedBox(
-                              width: 230,
-                              height: 230,
-                              child: CircularProgressIndicator(
-                                value: _sosHoldController.value,
-                                strokeWidth: 8,
-                                backgroundColor: AppTheme.primaryColor.withOpacity(0.08),
-                                valueColor: const AlwaysStoppedAnimation<Color>(AppTheme.primaryColor),
-                              ),
-                            ),
-                            
-                            // Concentric container background (pulse green if online, static red if offline)
-                            ScaleTransition(
-                              scale: _isOffline 
-                                  ? const AlwaysStoppedAnimation(1.0) 
-                                  : Tween<double>(begin: 0.95, end: 1.05).animate(_pulseController),
-                              child: Container(
-                                width: 200,
-                                height: 200,
-                                decoration: BoxDecoration(
-                                  shape: BoxShape.circle,
-                                  color: _isOffline 
-                                      ? AppTheme.primaryColor.withOpacity(0.08) 
-                                      : AppTheme.successColor.withOpacity(0.12),
-                                ),
-                              ),
-                            ),
-                            
-                            // Center premium gradient round button
-                            AnimatedScale(
-                              scale: _isSosHolding ? 0.92 : 1.0,
-                              duration: const Duration(milliseconds: 150),
-                              child: Container(
-                                width: 170,
-                                height: 170,
-                                decoration: BoxDecoration(
-                                  shape: BoxShape.circle,
-                                  gradient: const LinearGradient(
-                                    begin: Alignment.topLeft,
-                                    end: Alignment.bottomRight,
-                                    colors: [
-                                      Color(0xFFEF4444),
-                                      Color(0xFFDC2626),
-                                    ],
-                                  ),
-                                  boxShadow: [
-                                    BoxShadow(
-                                      color: AppTheme.primaryColor.withOpacity(0.4),
-                                      blurRadius: _isSosHolding ? 28 : 20,
-                                      spreadRadius: _isSosHolding ? 8 : 4,
-                                      offset: const Offset(0, 8),
+                                    Container(
+                                      padding: const EdgeInsets.all(8),
+                                      decoration: BoxDecoration(
+                                        color: AppTheme.successColor
+                                            .withOpacity(0.1),
+                                        shape: BoxShape.circle,
+                                      ),
+                                      child: ScaleTransition(
+                                        scale: Tween<double>(
+                                          begin: 0.9,
+                                          end: 1.1,
+                                        ).animate(_pulseController),
+                                        child: Icon(
+                                          _alertsLoadFailed
+                                              ? LucideIcons.alertTriangle
+                                              : _activeAlerts.isNotEmpty
+                                              ? LucideIcons.alertCircle
+                                              : LucideIcons.checkCircle,
+                                          color: _alertsLoadFailed
+                                              ? AppTheme.warningColor
+                                              : _activeAlerts.isNotEmpty
+                                              ? AppTheme.warningColor
+                                              : AppTheme.successColor,
+                                        ),
+                                      ),
                                     ),
-                                  ],
-                                ),
-                                child: Column(
-                                  mainAxisAlignment: MainAxisAlignment.center,
-                                  children: const [
-                                    Icon(LucideIcons.siren, color: Colors.white, size: 44),
-                                    SizedBox(height: 8),
-                                    Text(
-                                      'SOS',
-                                      style: TextStyle(color: Colors.white, fontSize: 32, fontWeight: FontWeight.bold, letterSpacing: 1),
-                                    ),
-                                    Text(
-                                      'EMERGENCY',
-                                      style: TextStyle(color: Colors.white70, fontSize: 11, fontWeight: FontWeight.w700, letterSpacing: 1.5),
-                                    ),
-                                  ],
-                                ),
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                    ),
-                    const SizedBox(height: 24),
-                    Center(
-                      child: Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                        decoration: BoxDecoration(
-                          color: _isOffline ? AppTheme.errorColor.withOpacity(0.1) : AppTheme.successColor.withOpacity(0.1),
-                          borderRadius: BorderRadius.circular(20),
-                          border: Border.all(color: _isOffline ? AppTheme.errorColor.withOpacity(0.3) : AppTheme.successColor.withOpacity(0.3)),
-                        ),
-                        child: Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            Icon(
-                              _isOffline ? LucideIcons.wifiOff : LucideIcons.radioReceiver, 
-                              size: 14, 
-                              color: _isOffline ? AppTheme.errorColor : AppTheme.successColor
-                            ),
-                            const SizedBox(width: 8),
-                            Text(
-                              _isOffline ? 'Offline • SMS Fallback Active' : 'Connected • Live Tracking',
-                              style: TextStyle(
-                                color: _isOffline ? AppTheme.errorColor : AppTheme.successColor,
-                                fontWeight: FontWeight.bold,
-                                fontSize: 12,
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                    ),
-                    const SizedBox(height: 12),
-                    Center(
-                      child: Text(
-                        _isSosHolding ? 'HOLDING SOS...' : 'Press and hold for 3 seconds',
-                        style: TextStyle(
-                          color: _isSosHolding ? AppTheme.primaryColor : AppTheme.textSecondary,
-                          fontWeight: _isSosHolding ? FontWeight.bold : FontWeight.normal,
-                          fontSize: 13,
-                        ),
-                      ),
-                    ),
-                    
-                    const SizedBox(height: 32),
-                    Row(
-                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                      children: [
-                        const Text('Recent Alerts', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
-                        TextButton(
-                          onPressed: _showNotificationsSheet,
-                          child: const Text('View all', style: TextStyle(color: AppTheme.textSecondary)),
-                        ),
-                      ],
-                    ),
-                    
-                    // ── Dynamic Alert Cards ──
-                    if (_alertsLoading)
-                      const Center(child: Padding(
-                        padding: EdgeInsets.symmetric(vertical: 24),
-                        child: CircularProgressIndicator(color: AppTheme.primaryColor),
-                      ))
-                    else if (_activeAlerts.isEmpty)
-                      // "All Clear" state — no active alerts
-                      Container(
-                        padding: const EdgeInsets.all(20),
-                        decoration: BoxDecoration(
-                          color: const Color(0xFFECFDF5),
-                          borderRadius: BorderRadius.circular(16),
-                          border: Border.all(color: const Color(0xFF6EE7B7).withOpacity(0.5)),
-                        ),
-                        child: Row(
-                          children: [
-                            Container(
-                              padding: const EdgeInsets.all(10),
-                              decoration: BoxDecoration(
-                                color: AppTheme.successColor.withOpacity(0.15),
-                                shape: BoxShape.circle,
-                              ),
-                              child: const Icon(LucideIcons.shieldCheck, color: AppTheme.successColor, size: 24),
-                            ),
-                            const SizedBox(width: 14),
-                            Expanded(
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  const Text('All Clear', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 17, color: Color(0xFF065F46))),
-                                  const SizedBox(height: 4),
-                                  Text(
-                                    'No active alerts in your area. EAWS is actively monitoring.',
-                                    style: TextStyle(fontSize: 13, color: const Color(0xFF065F46).withOpacity(0.7)),
-                                  ),
-                                ],
-                              ),
-                            ),
-                          ],
-                        ),
-                      )
-                    else
-                      ..._activeAlerts.map((alert) => _buildAlertCard(alert)),
-                    
-                    const SizedBox(height: 16),
-                    
-                    // ── Nearest Safe Zone Card ──
-                    GestureDetector(
-                      onTap: () async {
-                        if (_nearestZone != null) {
-                          final availableMaps = await ml.MapLauncher.installedMaps;
-                          if (availableMaps.isNotEmpty) {
-                            // Prefer Google Maps, fallback to first available
-                            final googleMap = availableMaps.firstWhere(
-                              (m) => m.mapType == ml.MapType.google,
-                              orElse: () => availableMaps.first,
-                            );
-                            await googleMap.showDirections(
-                              destination: ml.Coords(_nearestZone!.latitude, _nearestZone!.longitude),
-                              destinationTitle: _nearestZone!.name,
-                              origin: ml.Coords(_latitude, _longitude),
-                              originTitle: 'My Location',
-                            );
-                          } else {
-                            // Fallback: open Google Maps web URL
-                            final url = 'https://www.google.com/maps/dir/?api=1&origin=$_latitude,$_longitude&destination=${_nearestZone!.latitude},${_nearestZone!.longitude}';
-                            launchUrl(Uri.parse(url), mode: LaunchMode.externalApplication);
-                          }
-                        }
-                      },
-                      child: Container(
-                        padding: const EdgeInsets.all(16),
-                        decoration: BoxDecoration(
-                          color: Colors.white,
-                          borderRadius: BorderRadius.circular(16),
-                          border: Border.all(color: const Color(0xFFE5E7EB)),
-                        ),
-                        child: Row(
-                          children: [
-                            Container(
-                              padding: const EdgeInsets.all(10),
-                              decoration: BoxDecoration(
-                                color: const Color(0xFFDCFCE7),
-                                shape: BoxShape.circle,
-                              ),
-                              child: const Icon(LucideIcons.navigation, color: Color(0xFF16A34A), size: 20),
-                            ),
-                            const SizedBox(width: 14),
-                            Expanded(
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  const Text('Nearest Safe Zone', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
-                                  const SizedBox(height: 4),
-                                  Text(
-                                    _nearestZone != null
-                                        ? '${_nearestZone!.name} • ${_nearestZoneDistance?.toStringAsFixed(1)} km away'
-                                        : 'Locating nearest shelter...',
-                                    style: const TextStyle(color: AppTheme.textSecondary, fontSize: 12),
-                                  ),
-                                ],
-                              ),
-                            ),
-                            Container(
-                              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-                              decoration: BoxDecoration(
-                                color: AppTheme.primaryColor,
-                                borderRadius: BorderRadius.circular(8),
-                              ),
-                              child: Row(
-                                mainAxisSize: MainAxisSize.min,
-                                children: const [
-                                  Icon(LucideIcons.mapPin, color: Colors.white, size: 14),
-                                  SizedBox(width: 4),
-                                  Text('Route', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 12)),
-                                ],
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                    ),
-                    const SizedBox(height: 32),
-                    
-                    // ── Evacuation Map (Google Maps) ──
-                    const Text('Evacuation Map', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
-                    const SizedBox(height: 16),
-                    Container(
-                      height: 220,
-                      decoration: BoxDecoration(
-                        borderRadius: BorderRadius.circular(16),
-                        border: Border.all(color: const Color(0xFFE5E7EB)),
-                      ),
-                      clipBehavior: Clip.antiAlias,
-                      child: Stack(
-                        children: [
-                          GoogleMap(
-                            initialCameraPosition: CameraPosition(
-                              target: LatLng(_latitude, _longitude),
-                              zoom: 12.0,
-                            ),
-                            myLocationEnabled: true,
-                            myLocationButtonEnabled: false,
-                            zoomControlsEnabled: false,
-                            mapToolbarEnabled: false,
-                            markers: _safeZones.map((zone) {
-                              return Marker(
-                                markerId: MarkerId(zone.id),
-                                position: LatLng(zone.latitude, zone.longitude),
-                                infoWindow: InfoWindow(
-                                  title: zone.name,
-                                  snippet: zone.isOpen ? 'OPEN' : 'CLOSED',
-                                ),
-                                icon: BitmapDescriptor.defaultMarkerWithHue(
-                                  zone.isOpen ? BitmapDescriptor.hueGreen : BitmapDescriptor.hueRed,
-                                ),
-                              );
-                            }).toSet(),
-                          ),
-                          // Overlay label
-                          if (_nearestZone != null)
-                            Positioned(
-                              bottom: 12,
-                              left: 12,
-                              right: 12,
-                              child: Container(
-                                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-                                decoration: BoxDecoration(
-                                  color: Colors.white,
-                                  borderRadius: BorderRadius.circular(12),
-                                  boxShadow: [
-                                    BoxShadow(color: Colors.black.withOpacity(0.1), blurRadius: 10),
-                                  ],
-                                ),
-                                child: Row(
-                                  children: [
-                                    const Icon(LucideIcons.navigation, color: AppTheme.primaryColor, size: 18),
-                                    const SizedBox(width: 8),
+                                    const SizedBox(width: 12),
                                     Expanded(
-                                      child: Text(
-                                        '${_nearestZone!.name}: ${_nearestZoneDistance?.toStringAsFixed(1)}km away',
-                                        style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13),
-                                        overflow: TextOverflow.ellipsis,
+                                      child: Column(
+                                        crossAxisAlignment:
+                                            CrossAxisAlignment.start,
+                                        children: [
+                                          Text(
+                                            _alertsLoading
+                                                ? 'Checking alert feed…'
+                                                : _alertsLoadFailed
+                                                ? 'Alert status unknown'
+                                                : _activeAlerts.isEmpty
+                                                ? 'No active alerts published'
+                                                : '${_activeAlerts.length} active alerts',
+                                            style: const TextStyle(
+                                              fontWeight: FontWeight.bold,
+                                              fontSize: 16,
+                                            ),
+                                          ),
+                                          const SizedBox(height: 4),
+                                          Text(
+                                            _locationLoaded
+                                                ? 'Location: $_currentLocationName · ±${_accuracy.toStringAsFixed(0)}m'
+                                                : _currentLocationName,
+                                            style: const TextStyle(
+                                              color: AppTheme.textSecondary,
+                                              fontSize: 12,
+                                            ),
+                                          ),
+                                        ],
                                       ),
                                     ),
                                   ],
                                 ),
+                                const SizedBox(height: 12),
+                                const Divider(),
+                                const SizedBox(height: 8),
+                                Row(
+                                  children: [
+                                    const Icon(
+                                      LucideIcons.clock,
+                                      size: 14,
+                                      color: AppTheme.textSecondary,
+                                    ),
+                                    const SizedBox(width: 6),
+                                    const Text(
+                                      'Status requires server confirmation',
+                                      style: TextStyle(
+                                        color: AppTheme.textSecondary,
+                                        fontSize: 12,
+                                      ),
+                                    ),
+                                    const Spacer(),
+                                    Container(
+                                      width: 8,
+                                      height: 8,
+                                      decoration: BoxDecoration(
+                                        color: _isOffline
+                                            ? AppTheme.errorColor
+                                            : AppTheme.successColor,
+                                        shape: BoxShape.circle,
+                                      ),
+                                    ),
+                                    const SizedBox(width: 6),
+                                    Text(
+                                      _isOffline ? 'Offline' : 'Online',
+                                      style: TextStyle(
+                                        color: _isOffline
+                                            ? AppTheme.errorColor
+                                            : AppTheme.successColor,
+                                        fontSize: 12,
+                                        fontWeight: FontWeight.bold,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ],
+                            ),
+                          ),
+                          const SizedBox(height: 32),
+
+                          // One-tap SOS; the request is submitted immediately.
+                          Center(
+                            child: Semantics(
+                              button: true,
+                              label: 'Send emergency SOS now',
+                              child: SizedBox(
+                                width: 220,
+                                height: 220,
+                                child: DecoratedBox(
+                                  decoration: BoxDecoration(
+                                    shape: BoxShape.circle,
+                                    color: AppTheme.primaryColor.withOpacity(
+                                      0.1,
+                                    ),
+                                  ),
+                                  child: Center(
+                                    child: SizedBox(
+                                      width: 176,
+                                      height: 176,
+                                      child: ElevatedButton(
+                                        onPressed: _triggerSOS,
+                                        style: ElevatedButton.styleFrom(
+                                          backgroundColor:
+                                              AppTheme.primaryColor,
+                                          foregroundColor: Colors.white,
+                                          shape: const CircleBorder(),
+                                          elevation: 8,
+                                          padding: EdgeInsets.zero,
+                                        ),
+                                        child: const Column(
+                                          mainAxisAlignment:
+                                              MainAxisAlignment.center,
+                                          children: [
+                                            Icon(LucideIcons.siren, size: 44),
+                                            SizedBox(height: 8),
+                                            Text(
+                                              'SOS',
+                                              style: TextStyle(
+                                                fontSize: 32,
+                                                fontWeight: FontWeight.bold,
+                                                letterSpacing: 1,
+                                              ),
+                                            ),
+                                            Text(
+                                              'EMERGENCY',
+                                              style: TextStyle(
+                                                color: Colors.white70,
+                                                fontSize: 11,
+                                                fontWeight: FontWeight.w700,
+                                                letterSpacing: 1.5,
+                                              ),
+                                            ),
+                                          ],
+                                        ),
+                                      ),
+                                    ),
+                                  ),
+                                ),
                               ),
                             ),
+                          ),
+                          const SizedBox(height: 24),
+                          Center(
+                            child: Container(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 16,
+                                vertical: 8,
+                              ),
+                              decoration: BoxDecoration(
+                                color: _isOffline
+                                    ? AppTheme.errorColor.withOpacity(0.1)
+                                    : AppTheme.successColor.withOpacity(0.1),
+                                borderRadius: BorderRadius.circular(20),
+                                border: Border.all(
+                                  color: _isOffline
+                                      ? AppTheme.errorColor.withOpacity(0.3)
+                                      : AppTheme.successColor.withOpacity(0.3),
+                                ),
+                              ),
+                              child: Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  Icon(
+                                    _isOffline
+                                        ? LucideIcons.wifiOff
+                                        : LucideIcons.radioReceiver,
+                                    size: 14,
+                                    color: _isOffline
+                                        ? AppTheme.errorColor
+                                        : AppTheme.successColor,
+                                  ),
+                                  const SizedBox(width: 8),
+                                  Text(
+                                    _isOffline
+                                        ? 'Offline · delivery unconfirmed'
+                                        : 'Network available · SOS not sent',
+                                    style: TextStyle(
+                                      color: _isOffline
+                                          ? AppTheme.errorColor
+                                          : AppTheme.successColor,
+                                      fontWeight: FontWeight.bold,
+                                      fontSize: 12,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ),
+                          const SizedBox(height: 12),
+                          Center(
+                            child: Text(
+                              'Tap once to send SOS · confirmation appears when recorded',
+                              style: TextStyle(
+                                color: AppTheme.textSecondary,
+                                fontWeight: FontWeight.w600,
+                                fontSize: 13,
+                              ),
+                            ),
+                          ),
+                          Center(
+                            child: TextButton.icon(
+                              onPressed: _showFirstAidGuide,
+                              icon: const Icon(LucideIcons.heartPulse),
+                              label: const Text(
+                                'First aid guide · works offline',
+                              ),
+                            ),
+                          ),
+
+                          const SizedBox(height: 32),
+                          Row(
+                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                            children: [
+                              const Text(
+                                'Recent Alerts',
+                                style: TextStyle(
+                                  fontSize: 18,
+                                  fontWeight: FontWeight.bold,
+                                ),
+                              ),
+                              TextButton(
+                                onPressed: _showNotificationsSheet,
+                                child: const Text(
+                                  'View all',
+                                  style: TextStyle(
+                                    color: AppTheme.textSecondary,
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+
+                          // ── Dynamic Alert Cards ──
+                          if (_alertsLoading)
+                            const Center(
+                              child: Padding(
+                                padding: EdgeInsets.symmetric(vertical: 24),
+                                child: CircularProgressIndicator(
+                                  color: AppTheme.primaryColor,
+                                ),
+                              ),
+                            )
+                          else if (_alertsLoadFailed)
+                            Container(
+                              padding: const EdgeInsets.all(20),
+                              decoration: BoxDecoration(
+                                color: const Color(0xFFFFF7ED),
+                                borderRadius: BorderRadius.circular(16),
+                                border: Border.all(
+                                  color: const Color(0xFFFDBA74),
+                                ),
+                              ),
+                              child: Row(
+                                children: [
+                                  const Icon(
+                                    LucideIcons.wifiOff,
+                                    color: Color(0xFF9A3412),
+                                  ),
+                                  const SizedBox(width: 12),
+                                  const Expanded(
+                                    child: Text(
+                                      'Nearby alerts could not be loaded. Their status is unknown.',
+                                      style: TextStyle(
+                                        color: Color(0xFF7C2D12),
+                                      ),
+                                    ),
+                                  ),
+                                  TextButton(
+                                    onPressed: () {
+                                      setState(() => _alertsLoading = true);
+                                      _loadAlertsAndZones();
+                                    },
+                                    child: const Text('Retry'),
+                                  ),
+                                ],
+                              ),
+                            )
+                          else if (_activeAlerts.isEmpty)
+                            Container(
+                              padding: const EdgeInsets.all(20),
+                              decoration: BoxDecoration(
+                                color: Colors.white,
+                                borderRadius: BorderRadius.circular(16),
+                                border: Border.all(
+                                  color: const Color(0xFFE2E8F0),
+                                ),
+                              ),
+                              child: Row(
+                                children: [
+                                  const Icon(
+                                    LucideIcons.info,
+                                    color: AppTheme.textSecondary,
+                                    size: 24,
+                                  ),
+                                  const SizedBox(width: 14),
+                                  const Expanded(
+                                    child: Column(
+                                      crossAxisAlignment:
+                                          CrossAxisAlignment.start,
+                                      children: [
+                                        Text(
+                                          'No active alerts near you',
+                                          style: TextStyle(
+                                            fontWeight: FontWeight.bold,
+                                            fontSize: 16,
+                                            color: AppTheme.textPrimary,
+                                          ),
+                                        ),
+                                        SizedBox(height: 4),
+                                        Text(
+                                          'This only reflects alerts returned by the configured service.',
+                                          style: TextStyle(
+                                            fontSize: 12,
+                                            color: AppTheme.textSecondary,
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            )
+                          else
+                            ..._activeAlerts.map(
+                              (alert) => _buildAlertCard(alert),
+                            ),
+
+                          const SizedBox(height: 16),
+
+                          // ── Nearest Safe Zone Card ──
+                          GestureDetector(
+                            onTap: () async {
+                              if (_nearestZone != null) {
+                                final availableMaps =
+                                    await ml.MapLauncher.installedMaps;
+                                if (availableMaps.isNotEmpty) {
+                                  // Prefer Google Maps, fallback to first available
+                                  final googleMap = availableMaps.firstWhere(
+                                    (m) => m.mapType == ml.MapType.google,
+                                    orElse: () => availableMaps.first,
+                                  );
+                                  await googleMap.showDirections(
+                                    destination: ml.Coords(
+                                      _nearestZone!.latitude,
+                                      _nearestZone!.longitude,
+                                    ),
+                                    destinationTitle: _nearestZone!.name,
+                                    origin: ml.Coords(_latitude, _longitude),
+                                    originTitle: 'My Location',
+                                  );
+                                } else {
+                                  // Fallback: open Google Maps web URL
+                                  final url =
+                                      'https://www.google.com/maps/dir/?api=1&origin=$_latitude,$_longitude&destination=${_nearestZone!.latitude},${_nearestZone!.longitude}';
+                                  launchUrl(
+                                    Uri.parse(url),
+                                    mode: LaunchMode.externalApplication,
+                                  );
+                                }
+                              }
+                            },
+                            child: Container(
+                              padding: const EdgeInsets.all(16),
+                              decoration: BoxDecoration(
+                                color: Colors.white,
+                                borderRadius: BorderRadius.circular(16),
+                                border: Border.all(
+                                  color: const Color(0xFFE5E7EB),
+                                ),
+                              ),
+                              child: Row(
+                                children: [
+                                  Container(
+                                    padding: const EdgeInsets.all(10),
+                                    decoration: BoxDecoration(
+                                      color: const Color(0xFFDCFCE7),
+                                      shape: BoxShape.circle,
+                                    ),
+                                    child: const Icon(
+                                      LucideIcons.navigation,
+                                      color: Color(0xFF16A34A),
+                                      size: 20,
+                                    ),
+                                  ),
+                                  const SizedBox(width: 14),
+                                  Expanded(
+                                    child: Column(
+                                      crossAxisAlignment:
+                                          CrossAxisAlignment.start,
+                                      children: [
+                                        const Text(
+                                          'Nearest Safe Zone',
+                                          style: TextStyle(
+                                            fontWeight: FontWeight.bold,
+                                            fontSize: 16,
+                                          ),
+                                        ),
+                                        const SizedBox(height: 4),
+                                        Text(
+                                          _nearestZone != null
+                                              ? '${_nearestZone!.name} • ${_nearestZoneDistance?.toStringAsFixed(1)} km away'
+                                              : _alertsLoadFailed
+                                              ? 'Safe-zone status unavailable'
+                                              : _safeZones.isEmpty
+                                              ? 'No active safe zones reported'
+                                              : 'Location unavailable — distance not calculated',
+                                          style: const TextStyle(
+                                            color: AppTheme.textSecondary,
+                                            fontSize: 12,
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                  Container(
+                                    padding: const EdgeInsets.symmetric(
+                                      horizontal: 10,
+                                      vertical: 6,
+                                    ),
+                                    decoration: BoxDecoration(
+                                      color: AppTheme.primaryColor,
+                                      borderRadius: BorderRadius.circular(8),
+                                    ),
+                                    child: Row(
+                                      mainAxisSize: MainAxisSize.min,
+                                      children: const [
+                                        Icon(
+                                          LucideIcons.mapPin,
+                                          color: Colors.white,
+                                          size: 14,
+                                        ),
+                                        SizedBox(width: 4),
+                                        Text(
+                                          'Route',
+                                          style: TextStyle(
+                                            color: Colors.white,
+                                            fontWeight: FontWeight.bold,
+                                            fontSize: 12,
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ),
+                          const SizedBox(height: 32),
+
+                          // ── Evacuation Map (Google Maps) ──
+                          const Text(
+                            'Evacuation Map',
+                            style: TextStyle(
+                              fontSize: 18,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                          const SizedBox(height: 16),
+                          Container(
+                            height: 220,
+                            decoration: BoxDecoration(
+                              borderRadius: BorderRadius.circular(16),
+                              border: Border.all(
+                                color: const Color(0xFFE5E7EB),
+                              ),
+                            ),
+                            clipBehavior: Clip.antiAlias,
+                            child: Stack(
+                              children: [
+                                GoogleMap(
+                                  initialCameraPosition: CameraPosition(
+                                    target: LatLng(_latitude, _longitude),
+                                    zoom: 12.0,
+                                  ),
+                                  myLocationEnabled: true,
+                                  myLocationButtonEnabled: false,
+                                  zoomControlsEnabled: false,
+                                  mapToolbarEnabled: false,
+                                  markers: _safeZones.map((zone) {
+                                    return Marker(
+                                      markerId: MarkerId(zone.id),
+                                      position: LatLng(
+                                        zone.latitude,
+                                        zone.longitude,
+                                      ),
+                                      infoWindow: InfoWindow(
+                                        title: zone.name,
+                                        snippet: zone.isOpen
+                                            ? 'OPEN'
+                                            : 'CLOSED',
+                                      ),
+                                      icon:
+                                          BitmapDescriptor.defaultMarkerWithHue(
+                                            zone.isOpen
+                                                ? BitmapDescriptor.hueGreen
+                                                : BitmapDescriptor.hueRed,
+                                          ),
+                                    );
+                                  }).toSet(),
+                                ),
+                                // Overlay label
+                                if (_nearestZone != null)
+                                  Positioned(
+                                    bottom: 12,
+                                    left: 12,
+                                    right: 12,
+                                    child: Container(
+                                      padding: const EdgeInsets.symmetric(
+                                        horizontal: 14,
+                                        vertical: 10,
+                                      ),
+                                      decoration: BoxDecoration(
+                                        color: Colors.white,
+                                        borderRadius: BorderRadius.circular(12),
+                                        boxShadow: [
+                                          BoxShadow(
+                                            color: Colors.black.withOpacity(
+                                              0.1,
+                                            ),
+                                            blurRadius: 10,
+                                          ),
+                                        ],
+                                      ),
+                                      child: Row(
+                                        children: [
+                                          const Icon(
+                                            LucideIcons.navigation,
+                                            color: AppTheme.primaryColor,
+                                            size: 18,
+                                          ),
+                                          const SizedBox(width: 8),
+                                          Expanded(
+                                            child: Text(
+                                              '${_nearestZone!.name}: ${_nearestZoneDistance?.toStringAsFixed(1)}km away',
+                                              style: const TextStyle(
+                                                fontWeight: FontWeight.bold,
+                                                fontSize: 13,
+                                              ),
+                                              overflow: TextOverflow.ellipsis,
+                                            ),
+                                          ),
+                                        ],
+                                      ),
+                                    ),
+                                  ),
+                              ],
+                            ),
+                          ),
+                          const SizedBox(height: 16),
+
+                          // Open map action button
+                          SizedBox(
+                            width: double.infinity,
+                            child: ElevatedButton.icon(
+                              style: ElevatedButton.styleFrom(
+                                backgroundColor: AppTheme.primaryColor,
+                                padding: const EdgeInsets.symmetric(
+                                  vertical: 18,
+                                ),
+                                shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(12),
+                                ),
+                              ),
+                              onPressed: _showEvacuationMapSheet,
+                              icon: const Icon(LucideIcons.map),
+                              label: const Text(
+                                'View All Safe Zones',
+                                style: TextStyle(fontWeight: FontWeight.bold),
+                              ),
+                            ),
+                          ),
+                          const SizedBox(height: 32),
+
+                          // Quick Action grid cards
+                          const Text(
+                            'Quick Actions',
+                            style: TextStyle(
+                              fontSize: 18,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                          const SizedBox(height: 16),
+                          GridView.count(
+                            crossAxisCount: 2,
+                            shrinkWrap: true,
+                            physics: const NeverScrollableScrollPhysics(),
+                            mainAxisSpacing: 16,
+                            crossAxisSpacing: 16,
+                            childAspectRatio: 1.1,
+                            children: [
+                              _buildActionCard(
+                                LucideIcons.flag,
+                                'Report Incident',
+                                'Notify authorities',
+                                AppTheme.errorColor.withOpacity(0.1),
+                                AppTheme.errorColor,
+                                _showReportIncidentSheet,
+                              ),
+                              _buildActionCard(
+                                LucideIcons.mapPin,
+                                'Share Location',
+                                'Send to contacts',
+                                AppTheme.primaryColor.withOpacity(0.1),
+                                AppTheme.primaryColor,
+                                _showShareLocationSheet,
+                              ),
+                              _buildActionCard(
+                                LucideIcons.contact,
+                                'Emergency Contacts',
+                                '${_contacts.length} saved',
+                                AppTheme.primaryColor.withOpacity(0.1),
+                                AppTheme.primaryColor,
+                                _showEmergencyContactsSheet,
+                              ),
+                              _buildActionCard(
+                                LucideIcons.messageSquare,
+                                'Offline SMS',
+                                'No signal mode',
+                                AppTheme.primaryColor.withOpacity(0.1),
+                                AppTheme.primaryColor,
+                                _showOfflineSmsSheet,
+                              ),
+                            ],
+                          ),
+                          const SizedBox(height: 48),
                         ],
                       ),
                     ),
-                    const SizedBox(height: 16),
-                    
-                    // Open map action button
-                    SizedBox(
-                      width: double.infinity,
-                      child: ElevatedButton.icon(
-                        style: ElevatedButton.styleFrom(
-                          backgroundColor: AppTheme.primaryColor,
-                          padding: const EdgeInsets.symmetric(vertical: 18),
-                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                        ),
-                        onPressed: _showEvacuationMapSheet,
-                        icon: const Icon(LucideIcons.map),
-                        label: const Text('View All Safe Zones', style: TextStyle(fontWeight: FontWeight.bold)),
-                      ),
-                    ),
-                    const SizedBox(height: 32),
-                    
-                    // Quick Action grid cards
-                    const Text('Quick Actions', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
-                    const SizedBox(height: 16),
-                    GridView.count(
-                      crossAxisCount: 2,
-                      shrinkWrap: true,
-                      physics: const NeverScrollableScrollPhysics(),
-                      mainAxisSpacing: 16,
-                      crossAxisSpacing: 16,
-                      childAspectRatio: 1.1,
-                      children: [
-                        _buildActionCard(LucideIcons.flag, 'Report Incident', 'Notify authorities', AppTheme.errorColor.withOpacity(0.1), AppTheme.errorColor, _showReportIncidentSheet),
-                        _buildActionCard(LucideIcons.mapPin, 'Share Location', 'Send to contacts', AppTheme.primaryColor.withOpacity(0.1), AppTheme.primaryColor, _showShareLocationSheet),
-                        _buildActionCard(LucideIcons.contact, 'Emergency Contacts', '${_contacts.length} saved', AppTheme.primaryColor.withOpacity(0.1), AppTheme.primaryColor, _showEmergencyContactsSheet),
-                        _buildActionCard(LucideIcons.messageSquare, 'Offline SMS', 'No signal mode', AppTheme.primaryColor.withOpacity(0.1), AppTheme.primaryColor, _showOfflineSmsSheet),
-                      ],
-                    ),
-                    const SizedBox(height: 48),
-                  ],
-                ),
+                  ),
+                ],
               ),
             ),
-          ],
-        ),
-      ),
-    ),
-    
-    // Fixed Top Red Header Section (drawn on top of the scrollable content)
-    Positioned(
-      top: 0,
-      left: 0,
-      right: 0,
-      child: Container(
-        color: AppTheme.primaryColor,
-        padding: EdgeInsets.only(
-          top: MediaQuery.of(context).padding.top + 16,
-          left: 20,
-          right: 20,
-          bottom: 32,
-        ),
-        child: Row(
-          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Expanded(
+          ),
+
+          // Fixed Top Red Header Section (drawn on top of the scrollable content)
+          Positioned(
+            top: 0,
+            left: 0,
+            right: 0,
+            child: Container(
+              color: AppTheme.primaryColor,
+              padding: EdgeInsets.only(
+                top: MediaQuery.of(context).padding.top + 16,
+                left: 20,
+                right: 20,
+                bottom: 32,
+              ),
               child: Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  GestureDetector(
-                    onTap: () {
-                      // Tap avatar to quickly prompt location copy
-                      _showShareLocationSheet();
-                    },
-                    child: CircleAvatar(
-                      radius: 24,
-                      backgroundColor: Colors.white.withOpacity(0.2),
-                      child: const Icon(LucideIcons.user, color: Colors.white, size: 24),
-                    ),
-                  ),
-                  const SizedBox(width: 12),
                   Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
+                    child: Row(
                       children: [
-                        Row(
-                          children: const [
-                            Icon(LucideIcons.mapPin, color: Colors.white70, size: 14),
-                            SizedBox(width: 4),
-                            Text(
-                              'Current Location',
-                              style: TextStyle(
-                                color: Colors.white70,
-                                fontSize: 12,
-                              ),
-                            ),
-                          ],
-                        ),
-                        const SizedBox(height: 4),
-                        Text(
-                          _currentLocationName,
-                          style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 14),
-                        ),
-                        const SizedBox(height: 12),
-                        FittedBox(
-                          fit: BoxFit.scaleDown,
-                          alignment: Alignment.centerLeft,
-                          child: Text(
-                            'Hello, $displayName',
-                            style: const TextStyle(
+                        GestureDetector(
+                          onTap: () {
+                            // Tap avatar to quickly prompt location copy
+                            _showShareLocationSheet();
+                          },
+                          child: CircleAvatar(
+                            radius: 24,
+                            backgroundColor: Colors.white.withOpacity(0.2),
+                            child: const Icon(
+                              LucideIcons.user,
                               color: Colors.white,
-                              fontWeight: FontWeight.bold,
-                              fontSize: 24,
+                              size: 24,
                             ),
                           ),
                         ),
-                        const SizedBox(height: 4),
-                        const Text(
-                          'Stay safe today',
-                          style: TextStyle(color: Colors.white70, fontSize: 14),
+                        const SizedBox(width: 12),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Row(
+                                children: const [
+                                  Icon(
+                                    LucideIcons.mapPin,
+                                    color: Colors.white70,
+                                    size: 14,
+                                  ),
+                                  SizedBox(width: 4),
+                                  Text(
+                                    'Current Location',
+                                    style: TextStyle(
+                                      color: Colors.white70,
+                                      fontSize: 12,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                              const SizedBox(height: 4),
+                              Text(
+                                _currentLocationName,
+                                style: const TextStyle(
+                                  color: Colors.white,
+                                  fontWeight: FontWeight.bold,
+                                  fontSize: 14,
+                                ),
+                              ),
+                              const SizedBox(height: 12),
+                              FittedBox(
+                                fit: BoxFit.scaleDown,
+                                alignment: Alignment.centerLeft,
+                                child: Text(
+                                  'Hello, $displayName',
+                                  style: const TextStyle(
+                                    color: Colors.white,
+                                    fontWeight: FontWeight.bold,
+                                    fontSize: 24,
+                                  ),
+                                ),
+                              ),
+                              const SizedBox(height: 4),
+                              const Text(
+                                'Stay safe today',
+                                style: TextStyle(
+                                  color: Colors.white70,
+                                  fontSize: 14,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(width: 16),
+
+                  // Notifications bell trigger
+                  GestureDetector(
+                    onTap: _showNotificationsSheet,
+                    child: Stack(
+                      children: [
+                        Container(
+                          padding: const EdgeInsets.all(10),
+                          decoration: BoxDecoration(
+                            color: Colors.white.withOpacity(0.2),
+                            shape: BoxShape.circle,
+                          ),
+                          child: const Icon(
+                            LucideIcons.bell,
+                            color: Colors.white,
+                            size: 24,
+                          ),
+                        ),
+                        Positioned(
+                          right: 0,
+                          top: 0,
+                          child: Container(
+                            padding: const EdgeInsets.all(4),
+                            decoration: const BoxDecoration(
+                              color: AppTheme.errorColor,
+                              shape: BoxShape.circle,
+                            ),
+                            child: Text(
+                              _activeAlerts.length.toString(),
+                              style: const TextStyle(
+                                color: Colors.white,
+                                fontSize: 10,
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
+                          ),
                         ),
                       ],
                     ),
@@ -1861,49 +3150,20 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                 ],
               ),
             ),
-            const SizedBox(width: 16),
-            
-            // Notifications bell trigger
-            GestureDetector(
-              onTap: _showNotificationsSheet,
-              child: Stack(
-                children: [
-                  Container(
-                    padding: const EdgeInsets.all(10),
-                    decoration: BoxDecoration(
-                      color: Colors.white.withOpacity(0.2),
-                      shape: BoxShape.circle,
-                    ),
-                    child: const Icon(LucideIcons.bell, color: Colors.white, size: 24),
-                  ),
-                  Positioned(
-                    right: 0,
-                    top: 0,
-                    child: Container(
-                      padding: const EdgeInsets.all(4),
-                      decoration: const BoxDecoration(
-                        color: AppTheme.errorColor,
-                        shape: BoxShape.circle,
-                      ),
-                      child: Text(
-                        _activeAlerts.length.toString(),
-                        style: const TextStyle(color: Colors.white, fontSize: 10, fontWeight: FontWeight.bold),
-                      ),
-                    ),
-                  )
-                ],
-              ),
-            )
-          ],
-        ),
+          ),
+        ],
       ),
-    ),
-  ],
-),
     );
   }
 
-  Widget _buildActionCard(IconData icon, String title, String subtitle, Color bgColor, Color iconColor, VoidCallback onTap) {
+  Widget _buildActionCard(
+    IconData icon,
+    String title,
+    String subtitle,
+    Color bgColor,
+    Color iconColor,
+    VoidCallback onTap,
+  ) {
     return GestureDetector(
       onTap: onTap,
       child: Container(
@@ -1925,16 +3185,22 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
           children: [
             Container(
               padding: const EdgeInsets.all(10),
-              decoration: BoxDecoration(
-                color: bgColor,
-                shape: BoxShape.circle,
-              ),
+              decoration: BoxDecoration(color: bgColor, shape: BoxShape.circle),
               child: Icon(icon, color: iconColor),
             ),
             const SizedBox(height: 16),
-            Text(title, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14)),
+            Text(
+              title,
+              style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14),
+            ),
             const SizedBox(height: 4),
-            Text(subtitle, style: const TextStyle(color: AppTheme.textSecondary, fontSize: 12)),
+            Text(
+              subtitle,
+              style: const TextStyle(
+                color: AppTheme.textSecondary,
+                fontSize: 12,
+              ),
+            ),
           ],
         ),
       ),

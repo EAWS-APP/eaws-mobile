@@ -12,8 +12,8 @@ class Incident {
     required this.description,
     required this.isAnonymous,
     required this.locationName,
-    required this.latitude,
-    required this.longitude,
+    this.latitude,
+    this.longitude,
     required this.likesCount,
     required this.commentsCount,
     required this.createdAt,
@@ -36,8 +36,8 @@ class Incident {
   final bool isAnonymous;
   final bool isVerified;
   final String locationName;
-  final double latitude;
-  final double longitude;
+  final double? latitude;
+  final double? longitude;
   final String? mediaUrl;
   final String? mediaType;
   final int likesCount;
@@ -57,7 +57,9 @@ class Incident {
       description: (json['description'] ?? '').toString(),
       isAnonymous: json['is_anonymous'] == true,
       isVerified: json['is_verified'] == true,
-      locationName: (json['location_name'] ?? json['location'] ?? 'Unknown location').toString(),
+      locationName:
+          (json['location_name'] ?? json['location'] ?? 'Unknown location')
+              .toString(),
       latitude: _asDouble(json['latitude']),
       longitude: _asDouble(json['longitude']),
       mediaUrl: json['media_url']?.toString(),
@@ -65,13 +67,17 @@ class Incident {
       likesCount: _asInt(json['likes_count']),
       commentsCount: _asInt(json['comments_count']),
       viewsCount: _asInt(json['views_count']),
-      createdAt: DateTime.tryParse((json['created_at'] ?? '').toString()) ?? DateTime.now(),
+      createdAt:
+          DateTime.tryParse((json['created_at'] ?? '').toString()) ??
+          DateTime.now(),
     );
   }
 
   Map<String, dynamic> toUiMap() {
     final color = categoryColor(category);
-    final displayName = isAnonymous ? 'Anonymous Citizen' : (userName ?? 'Ghana Citizen');
+    final displayName = isAnonymous
+        ? 'Anonymous Citizen'
+        : (userName ?? 'Ghana Citizen');
     return {
       'id': id,
       'userId': userId,
@@ -114,9 +120,10 @@ class Incident {
     }
   }
 
-  static double _asDouble(dynamic value) {
+  static double? _asDouble(dynamic value) {
+    if (value == null) return null;
     if (value is num) return value.toDouble();
-    return double.tryParse(value?.toString() ?? '') ?? 0;
+    return double.tryParse(value.toString());
   }
 
   static int _asInt(dynamic value) {
@@ -125,7 +132,11 @@ class Incident {
   }
 
   static String _initials(String name) {
-    final parts = name.trim().split(RegExp(r'\s+')).where((part) => part.isNotEmpty).toList();
+    final parts = name
+        .trim()
+        .split(RegExp(r'\s+'))
+        .where((part) => part.isNotEmpty)
+        .toList();
     if (parts.isEmpty) return 'GC';
     if (parts.length == 1) return parts.first[0].toUpperCase();
     return '${parts.first[0]}${parts.last[0]}'.toUpperCase();
@@ -139,4 +150,3 @@ class Incident {
     return '${delta.inDays} days ago';
   }
 }
-

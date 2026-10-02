@@ -4,11 +4,12 @@ import 'package:eaws_app/main.dart';
 import 'package:eaws_app/features/auth/splash_screen.dart';
 
 void main() {
-  testWidgets('App starts with SplashScreen test', (WidgetTester tester) async {
-    // Build our app and trigger a frame.
+  testWidgets('App requires InsForge configuration before opening', (
+    WidgetTester tester,
+  ) async {
     await tester.pumpWidget(const EAWSApp());
 
-    // Verify that the SplashScreen starts first
-    expect(find.byType(SplashScreen), findsOneWidget);
+    expect(find.textContaining('EAWS is not configured'), findsOneWidget);
+    expect(find.byType(SplashScreen), findsNothing);
   });
 }
