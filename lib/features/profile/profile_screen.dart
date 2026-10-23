@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:lucide_icons/lucide_icons.dart';
 import '../../core/theme.dart';
+import '../../core/api_client.dart';
 import '../auth/auth_service.dart';
 import '../auth/login_screen.dart';
 import 'profile_data.dart';
@@ -48,6 +49,182 @@ class _ProfileScreenState extends State<ProfileScreen> {
     if (mounted) {
       setState(() {});
     }
+  }
+
+  void _showEmergencyContactsSheet() async {
+    final prefs = await SharedPreferences.getInstance();
+    final raw = prefs.getString('eaws_emergency_contacts');
+    List<Map<String, dynamic>> contacts = [];
+    if (raw != null) {
+      try {
+        final List decoded = jsonDecode(raw);
+        contacts = decoded.map((e) => Map<String, dynamic>.from(e)).toList();
+      } catch (_) {}
+    }
+
+    if (!mounted) return;
+
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (context) {
+        return StatefulBuilder(
+          builder: (context, setModalState) {
+            void addContactDialog() {
+              final nameController = TextEditingController();
+              final phoneController = TextEditingController();
+              showDialog(
+                context: context,
+                builder: (ctx) => AlertDialog(
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+                  title: const Text('Add Emergency Contact', style: TextStyle(fontWeight: FontWeight.bold)),
+                  content: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      TextField(
+                        controller: nameController,
+                        decoration: InputDecoration(
+                          labelText: 'Contact Name',
+                          hintText: 'e.g. Papa, Sister, Kwame',
+                          border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+                        ),
+                      ),
+                      const SizedBox(height: 12),
+                      TextField(
+                        controller: phoneController,
+                        keyboardType: TextInputType.phone,
+                        decoration: InputDecoration(
+                          labelText: 'Phone Number',
+                          hintText: '+233 24 000 0000',
+                          border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+                        ),
+                      ),
+                    ],
+                  ),
+                  actions: [
+                    TextButton(
+                      onPressed: () => Navigator.pop(ctx),
+                      child: const Text('Cancel', style: TextStyle(color: Colors.grey)),
+                    ),
+                    ElevatedButton(
+                      onPressed: () async {
+                        final name = nameController.text.trim();
+                        final phone = phoneController.text.trim();
+                        if (name.isNotEmpty && phone.isNotEmpty) {
+                          String initials = name.trim().split(' ').map((e) => e.isNotEmpty ? e[0].toUpperCase() : '').take(2).join();
+                          if (initials.isEmpty) initials = name.substring(0, 1).toUpperCase();
+                          setModalState(() {
+                            contacts.add({'name': name, 'phone': phone, 'initials': initials});
+                          });
+                          await prefs.setString('eaws_emergency_contacts', jsonEncode(contacts));
+                          try {
+                            await EawsApiClient.instance.patch('/me', body: {'emergency_contacts': contacts});
+                          } catch (_) {}
+                          setState(() {
+                            _contactCount = contacts.length;
+                          });
+                          Navigator.pop(ctx);
+                        }
+                      },
+                      style: ElevatedButton.styleFrom(backgroundColor: AppTheme.primaryColor),
+                      child: const Text('Add'),
+                    ),
+                  ],
+                ),
+              );
+            }
+
+            return Container(
+              height: MediaQuery.of(context).size.height * 0.75,
+              decoration: const BoxDecoration(
+                color: Color(0xFFF9FAFB),
+                borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+              ),
+              child: Column(
+                children: [
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
+                    decoration: const BoxDecoration(
+                      color: Colors.white,
+                      borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+                    ),
+                    child: Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        const Text('Emergency Contacts', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+                        IconButton(
+                          icon: const Icon(LucideIcons.userPlus, color: AppTheme.primaryColor),
+                          onPressed: addContactDialog,
+                        ),
+                      ],
+                    ),
+                  ),
+                  Expanded(
+                    child: contacts.isEmpty
+                        ? Center(
+                            child: Column(
+                              mainAxisAlignment: MainAxisAlignment.center,
+                              children: [
+                                const Icon(LucideIcons.users, size: 48, color: Colors.grey),
+                                const SizedBox(height: 12),
+                                const Text('No emergency contacts added yet', style: TextStyle(color: Colors.grey, fontWeight: FontWeight.bold)),
+                                const SizedBox(height: 16),
+                                ElevatedButton.icon(
+                                  onPressed: addContactDialog,
+                                  icon: const Icon(LucideIcons.plus),
+                                  label: const Text('Add First Contact'),
+                                  style: ElevatedButton.styleFrom(backgroundColor: AppTheme.primaryColor),
+                                ),
+                              ],
+                            ),
+                          )
+                        : ListView.separated(
+                            padding: const EdgeInsets.all(16),
+                            itemCount: contacts.length,
+                            separatorBuilder: (_, __) => const SizedBox(height: 10),
+                            itemBuilder: (ctx, idx) {
+                              final c = contacts[idx];
+                              return Container(
+                                decoration: BoxDecoration(
+                                  color: Colors.white,
+                                  borderRadius: BorderRadius.circular(16),
+                                  border: Border.all(color: const Color(0xFFE5E7EB)),
+                                ),
+                                child: ListTile(
+                                  leading: CircleAvatar(
+                                    backgroundColor: AppTheme.primaryColor.withOpacity(0.1),
+                                    child: Text(c['initials'] ?? 'EC', style: const TextStyle(color: AppTheme.primaryColor, fontWeight: FontWeight.bold)),
+                                  ),
+                                  title: Text(c['name'] ?? 'Contact', style: const TextStyle(fontWeight: FontWeight.bold)),
+                                  subtitle: Text(c['phone'] ?? ''),
+                                  trailing: IconButton(
+                                    icon: const Icon(LucideIcons.trash2, color: Colors.redAccent, size: 20),
+                                    onPressed: () async {
+                                      setModalState(() {
+                                        contacts.removeAt(idx);
+                                      });
+                                      await prefs.setString('eaws_emergency_contacts', jsonEncode(contacts));
+                                      try {
+                                        await EawsApiClient.instance.patch('/me', body: {'emergency_contacts': contacts});
+                                      } catch (_) {}
+                                      setState(() {
+                                        _contactCount = contacts.length;
+                                      });
+                                    },
+                                  ),
+                                ),
+                              );
+                            },
+                          ),
+                  ),
+                ],
+              ),
+            );
+          },
+        );
+      },
+    );
   }
 
   Future<void> _handleSignOut() async {
@@ -147,12 +324,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
                                 subtitle: '$_contactCount contacts added',
                                 onTap: () {
                                   HapticFeedback.lightImpact();
-                                  ScaffoldMessenger.of(context).showSnackBar(
-                                    const SnackBar(
-                                      content: Text('Please manage your emergency contacts from the Home dashboard.'),
-                                      backgroundColor: AppTheme.primaryColor,
-                                    ),
-                                  );
+                                  _showEmergencyContactsSheet();
                                 },
                               ),
                               const Divider(height: 1),

@@ -1,6 +1,6 @@
 import 'dart:convert';
 import 'dart:io';
-
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:eaws_app/core/supabase_mock.dart';
 
 class EawsApiClient {
@@ -8,13 +8,45 @@ class EawsApiClient {
 
   static final EawsApiClient instance = EawsApiClient._();
 
+  static String? customBaseUrl;
+  String? _authToken;
+
   static String get baseUrl {
+    if (customBaseUrl != null && customBaseUrl!.isNotEmpty) {
+      return customBaseUrl!;
+    }
     try {
       if (Platform.isAndroid) {
-        return 'http://10.0.2.2:5001/api';
+        return 'http://10.0.2.2:5000/api';
       }
     } catch (_) {}
-    return 'http://localhost:5001/api';
+    return 'http://localhost:5000/api';
+  }
+
+  void setAuthToken(String token) {
+    _authToken = token;
+    SharedPreferences.getInstance().then((prefs) {
+      prefs.setString('eaws_auth_token', token);
+    }).catchError((_) {});
+  }
+
+  Future<void> clearAuthToken() async {
+    _authToken = null;
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.remove('eaws_auth_token');
+    } catch (_) {}
+  }
+
+  Future<String?> getAuthToken() async {
+    if (_authToken != null && _authToken!.isNotEmpty) {
+      return _authToken;
+    }
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      _authToken = prefs.getString('eaws_auth_token');
+    } catch (_) {}
+    return _authToken;
   }
 
   Future<dynamic> get(String path, {Map<String, String>? query}) {
@@ -40,6 +72,8 @@ class EawsApiClient {
     Map<String, dynamic>? body,
   }) async {
     final session = Supabase.instance.client.auth.currentSession;
+    final persistedToken = await getAuthToken();
+
     final uri = Uri.parse('$baseUrl$path').replace(queryParameters: query);
     final client = HttpClient();
 
@@ -47,14 +81,13 @@ class EawsApiClient {
       final request = await client.openUrl(method, uri);
       request.headers.set(HttpHeaders.acceptHeader, 'application/json');
       request.headers.set(HttpHeaders.contentTypeHeader, 'application/json');
-      // Use real Supabase token if logged in; otherwise fall back to user-specific mock token
-      // so the backend can resolve the correct registered name from its user registry.
+
       String token;
-      if (session?.accessToken != null && session!.accessToken != 'mock-token') {
+      if (persistedToken != null && persistedToken.isNotEmpty && persistedToken != 'mock-token') {
+        token = persistedToken;
+      } else if (session?.accessToken != null && session!.accessToken != 'mock-token') {
         token = session!.accessToken;
       } else {
-        // Embed the user's email in the mock token so the server's resolveAuthorName()
-        // can look up their real full name (e.g. kwame@eaws.gov.gh → Kwame Asante).
         final userEmail = Supabase.instance.client.auth.currentUser?.email
             ?? 'kwame@eaws.gov.gh';
         token = 'mock-token-$userEmail';
@@ -70,7 +103,7 @@ class EawsApiClient {
 
       if (response.statusCode < 200 || response.statusCode >= 300) {
         throw HttpException(
-          responseBody.isNotEmpty ? responseBody : 'EAWS API request failed',
+          responseBody.isNotEmpty ? responseBody : 'EAWS API request failed ($method $path -> ${response.statusCode})',
           uri: uri,
         );
       }

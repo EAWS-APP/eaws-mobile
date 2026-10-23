@@ -75,39 +75,33 @@ class _MediaUploadsScreenState extends State<MediaUploadsScreen> {
       });
 
       try {
-        final supabase = Supabase.instance.client;
-        
-        // Upload image to Supabase storage bucket 'sos_evidence'
-        await supabase.storage.from('sos_evidence').upload(
-          filename,
-          file,
-          fileOptions: const FileOptions(cacheControl: '3600', upsert: true),
-        );
-        
-        final String publicUrl = supabase.storage.from('sos_evidence').getPublicUrl(filename);
-        
+        final reportsData = await EawsApiClient.instance.get('/incidents/my-reports');
+        final List reports = reportsData is List ? reportsData : (reportsData['incidents'] ?? []);
+        final String? latestIncidentId = reports.isNotEmpty ? reports.first['id']?.toString() : null;
+
+        final bytes = await file.readAsBytes();
+        final base64Content = base64Encode(bytes);
+
+        final res = await EawsApiClient.instance.post('/incidents/upload', body: {
+          if (latestIncidentId != null) 'incident_id': latestIncidentId,
+          'file_name': filename,
+          'file_base64': base64Content,
+          'media_type': 'image',
+          'mime_type': 'image/jpeg',
+          'description': 'Mobile camera evidence upload',
+        });
+
+        final String publicUrl = (res != null && res['file_url'] != null)
+            ? res['file_url'].toString()
+            : Supabase.instance.client.storage.from('sos_evidence').getPublicUrl(filename);
+
         setState(() {
           newItem['progress'] = 1.0;
           newItem['status'] = 'Completed';
           newItem['thumbUrl'] = publicUrl;
         });
-
-        // Sync media to Express backend
-        final reportsData = await EawsApiClient.instance.get('/incidents/my-reports');
-        final List reports = reportsData['incidents'] ?? [];
-        if (reports.isNotEmpty) {
-          final latestIncidentId = reports.first['id'];
-          await EawsApiClient.instance.post('/incidents/$latestIncidentId/media', body: {
-            'media_type': 'image',
-            'storage_bucket': 'sos_evidence',
-            'storage_path': filename,
-            'file_url': publicUrl,
-            'mime_type': 'image/jpeg',
-            'file_size_bytes': file.lengthSync(),
-          });
-        }
       } catch (uploadErr) {
-        print('Supabase direct upload failed, running high fidelity simulation fallback: $uploadErr');
+        print('Direct upload failed, running high fidelity simulation fallback: $uploadErr');
         _simulateUpload(newItem);
       }
     } catch (e) {

@@ -420,8 +420,16 @@ class _ReportIncidentScreenState extends State<ReportIncidentScreen> {
                 : 'https://images.unsplash.com/photo-1547683905-f686c993aae5?auto=format&fit=crop&q=80&w=800');
         isVideoReport = !_isImage;
       } else {
-        finalImageAsset = mediaPath;
         isVideoReport = !_isImage;
+        try {
+          final uploadedUrl = await IncidentApi.instance.uploadMedia(
+            _selectedMediaFile!,
+            mediaType: isVideoReport ? 'video' : 'image',
+          );
+          finalImageAsset = uploadedUrl ?? mediaPath;
+        } catch (_) {
+          finalImageAsset = mediaPath;
+        }
       }
     }
 

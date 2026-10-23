@@ -61,41 +61,12 @@ class _LoginScreenState extends State<LoginScreen> {
     }
 
     if (success) {
-      if (email.toLowerCase() == 'masters2d@gmail.com') {
-        // Automatically approve this specific email
-        await AuthService.instance.updateUserMetadata({'is_approved': true});
-      }
-
-      if (!AuthService.instance.isApproved && email.toLowerCase() != 'masters2d@gmail.com') {
-        // Sign out immediately if not approved
-        await AuthService.instance.signOut();
-        if (context.mounted) {
-          showDialog(
-            context: context,
-            builder: (context) => AlertDialog(
-              title: const Text('Pending Approval'),
-              content: const Text(
-                'Your account has been created but is currently pending administrator approval. '
-                'You will be able to log in once your details are verified.',
-              ),
-              actions: [
-                TextButton(
-                  onPressed: () => Navigator.pop(context),
-                  child: const Text('OK', style: TextStyle(color: AppTheme.primaryColor)),
-                ),
-              ],
-            ),
-          );
-        }
-      } else {
-        // Load and cache the real user name before entering the app
-        await UserSession.instance.load(force: true);
-        if (context.mounted) {
-          Navigator.pushReplacement(
-            context,
-            MaterialPageRoute(builder: (context) => const DashboardScreen()),
-          );
-        }
+      await UserSession.instance.load(force: true);
+      if (context.mounted) {
+        Navigator.pushReplacement(
+          context,
+          MaterialPageRoute(builder: (context) => const DashboardScreen()),
+        );
       }
     } else {
       _showError('Invalid email or password. Please try again.');

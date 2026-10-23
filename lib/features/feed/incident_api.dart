@@ -77,6 +77,57 @@ class IncidentApi {
     });
   }
 
+  Future<List<Incident>> getMyReports() async {
+    try {
+      final data = await EawsApiClient.instance.get('/incidents/my-reports');
+      final items = data is List ? data : (data['incidents'] as List? ?? data['items'] as List? ?? []);
+      return items.map((item) => Incident.fromJson(Map<String, dynamic>.from(item))).toList();
+    } catch (e) {
+      print('EAWS getMyReports failed: $e');
+      return [];
+    }
+  }
+
+  Future<String?> uploadMedia(
+    dynamic fileOrPath, {
+    String? incidentId,
+    String? mediaType,
+  }) async {
+    try {
+      File file;
+      if (fileOrPath is File) {
+        file = fileOrPath;
+      } else {
+        file = File(fileOrPath.toString());
+      }
+
+      if (!await file.exists()) return null;
+
+      final bytes = await file.readAsBytes();
+      final base64Content = base64Encode(bytes);
+      final fileName = file.path.split(Platform.pathSeparator).last;
+
+      final res = await EawsApiClient.instance.post(
+        '/incidents/upload',
+        body: {
+          if (incidentId != null) 'incident_id': incidentId,
+          'file_name': fileName,
+          'file_base64': base64Content,
+          'media_type': mediaType ?? (fileName.endsWith('.mp4') ? 'video' : 'image'),
+          'mime_type': fileName.endsWith('.mp4') ? 'video/mp4' : 'image/jpeg',
+          'description': 'Mobile camera upload',
+        },
+      );
+
+      if (res != null && res['file_url'] != null) {
+        return res['file_url'].toString();
+      }
+    } catch (e) {
+      print('EAWS uploadMedia error: $e');
+    }
+    return null;
+  }
+
   Future<void> deleteIncident(String id) {
     return EawsApiClient.instance.delete('/incidents/$id');
   }

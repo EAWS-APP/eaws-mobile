@@ -9,6 +9,8 @@ import 'report_incident_screen.dart';
 import 'incident_detail_screen.dart';
 import 'community_post_detail_screen.dart';
 
+import 'incident_api.dart';
+
 class MyReportsScreen extends StatefulWidget {
   const MyReportsScreen({super.key});
 
@@ -148,6 +150,24 @@ class _MyReportsScreenState extends State<MyReportsScreen> {
   }
 
   Future<void> _loadUserPersonalReports() async {
+    // 1. Fetch remote reports from EAWS backend /incidents/my-reports
+    try {
+      final remoteReports = await IncidentApi.instance.getMyReports();
+      if (remoteReports.isNotEmpty) {
+        final list = List<Map<String, dynamic>>.from(communityReportsNotifier.value);
+        for (var rep in remoteReports) {
+          final uiMap = rep.toUiMap();
+          if (!list.any((r) => r['id'].toString() == uiMap['id'].toString())) {
+            list.insert(0, uiMap);
+          }
+        }
+        communityReportsNotifier.value = list;
+      }
+    } catch (e) {
+      print('EAWS MyReports remote fetch fallback: $e');
+    }
+
+    // 2. Merge local device store reports
     final userSavedReports = await UserDataStore.instance.loadUserReports();
     if (userSavedReports.isNotEmpty) {
       final list = List<Map<String, dynamic>>.from(communityReportsNotifier.value);

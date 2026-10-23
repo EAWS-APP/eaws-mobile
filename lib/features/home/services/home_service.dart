@@ -1,57 +1,61 @@
-import 'package:eaws_app/core/supabase_mock.dart';
+import 'package:eaws_app/core/api_client.dart';
 import '../models/alert_model.dart';
 import '../models/safe_zone_model.dart';
 
 /// Service responsible for fetching live alerts and safe-zone data
-/// from the Supabase backend, with built-in mock-data fallbacks.
+/// from the EAWS backend (port 5000), with built-in mock-data fallbacks.
 class HomeService {
   static final HomeService _instance = HomeService._internal();
   factory HomeService() => _instance;
   HomeService._internal();
 
-  final _supabase = Supabase.instance.client;
-
   // ──────────────────────────── ALERTS ────────────────────────────
 
-  /// Fetch active alerts from Supabase. Falls back to mock data
-  /// if the table does not exist or the query fails.
+  /// Fetch active alerts from EAWS backend /alerts/active.
   Future<List<AlertModel>> getActiveAlerts() async {
     try {
-      final response = await _supabase
-          .from('alerts')
-          .select()
-          .order('created_at', ascending: false);
+      final response = await EawsApiClient.instance.get('/alerts/active');
 
-      if (response.isEmpty) return [];
+      List items = [];
+      if (response is List) {
+        items = response;
+      } else if (response is Map && response['alerts'] is List) {
+        items = response['alerts'];
+      }
 
-      return (response as List)
-          .map((e) => AlertModel.fromMap(e))
+      if (items.isEmpty) return [];
+
+      return items
+          .map((e) => AlertModel.fromMap(Map<String, dynamic>.from(e)))
           .where((a) => a.isActive)
           .toList();
     } catch (e) {
-      print('EAWS HomeService: alerts table not available, using fallback – $e');
+      print('EAWS HomeService: /alerts/active error, using fallback – $e');
       return _mockAlerts();
     }
   }
 
   // ──────────────────────────── SAFE ZONES ────────────────────────
 
-  /// Fetch safe zones from Supabase. Falls back to Accra-area mock
-  /// shelters if the table does not exist.
+  /// Fetch safe zones from EAWS backend /safe-zones.
   Future<List<SafeZoneModel>> getSafeZones() async {
     try {
-      final response = await _supabase
-          .from('safe_zones')
-          .select()
-          .order('name', ascending: true);
+      final response = await EawsApiClient.instance.get('/safe-zones');
 
-      if (response.isEmpty) return _mockSafeZones();
+      List items = [];
+      if (response is List) {
+        items = response;
+      } else if (response is Map && response['safe_zones'] is List) {
+        items = response['safe_zones'];
+      }
 
-      return (response as List)
-          .map((e) => SafeZoneModel.fromMap(e))
+      if (items.isEmpty) return _mockSafeZones();
+
+      return items
+          .map((e) => SafeZoneModel.fromMap(Map<String, dynamic>.from(e)))
           .toList();
     } catch (e) {
-      print('EAWS HomeService: safe_zones table not available, using fallback – $e');
+      print('EAWS HomeService: /safe-zones error, using fallback – $e');
       return _mockSafeZones();
     }
   }

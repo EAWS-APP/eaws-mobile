@@ -46,6 +46,7 @@ class _SOSScreenState extends State<SOSScreen> with TickerProviderStateMixin {
   String _selectedCategory = '';
   List<Map<String, dynamic>> _emergencyContacts = [];
   Timer? _backgroundTrackingTimer;
+  Timer? _dispatchPollingTimer;
   StreamSubscription<List<ConnectivityResult>>? _connectivitySubscription;
 
   // Per-user SOS history (loaded from UserDataStore)
@@ -189,6 +190,7 @@ class _SOSScreenState extends State<SOSScreen> with TickerProviderStateMixin {
   void dispose() {
     _countdownTimer?.cancel();
     _backgroundTrackingTimer?.cancel();
+    _dispatchPollingTimer?.cancel();
     _simulationTimer?.cancel();
     _blinkTimer?.cancel();
     _connectivitySubscription?.cancel();
@@ -229,6 +231,8 @@ class _SOSScreenState extends State<SOSScreen> with TickerProviderStateMixin {
     _countdownTimer?.cancel();
     _backgroundTrackingTimer?.cancel();
     _backgroundTrackingTimer = null;
+    _dispatchPollingTimer?.cancel();
+    _dispatchPollingTimer = null;
     _blinkTimer?.cancel();
     _flashController.stop();
     final incidentId = _activeIncidentId;
@@ -349,10 +353,21 @@ class _SOSScreenState extends State<SOSScreen> with TickerProviderStateMixin {
             incident['id']?.toString() ?? incident['incident_id']?.toString();
       });
 
-      // 5. Start background tracking timer
+      // 5. Start background tracking timer & notify emergency contacts
       _startBackgroundTracking();
 
-      // 6. Start dispatch simulation
+      if (_activeIncidentId != null && _emergencyContacts.isNotEmpty) {
+        SosApi.instance.notifyEmergencyContacts(
+          _activeIncidentId!,
+          contacts: _emergencyContacts,
+          latitude: position.latitude,
+          longitude: position.longitude,
+          locationName: resolvedAddress,
+        );
+      }
+
+      // 6. Start real dispatch polling & visual responder simulation
+      _startDispatchPolling();
       _startResponderSimulation();
 
       // 7. Save to local history
@@ -622,13 +637,12 @@ class _SOSScreenState extends State<SOSScreen> with TickerProviderStateMixin {
         });
 
         if (!incidentId.startsWith('mock-')) {
-          await Supabase.instance.client
-              .from('incidents')
-              .update({
-                'latitude': position.latitude,
-                'longitude': position.longitude,
-              })
-              .eq('id', incidentId);
+          await SosApi.instance.updateSosLocation(
+            incidentId,
+            latitude: position.latitude,
+            longitude: position.longitude,
+            accuracy: position.accuracy,
+          );
         }
 
         print(
@@ -640,10 +654,56 @@ class _SOSScreenState extends State<SOSScreen> with TickerProviderStateMixin {
     });
   }
 
+  void _startDispatchPolling() {
+    _dispatchPollingTimer?.cancel();
+    _dispatchPollingTimer = Timer.periodic(const Duration(seconds: 4), (timer) async {
+      final incidentId = _activeIncidentId;
+      if (incidentId == null || !_isSOSActive) {
+        timer.cancel();
+        return;
+      }
+      try {
+        final details = await SosApi.instance.getIncidentDetails(incidentId);
+        if (details != null && mounted) {
+          final assignments = details['assignments'] as List? ??
+              details['incident_assignments'] as List? ??
+              [];
+          final responses = details['responses'] as List? ?? [];
+
+          if (assignments.isNotEmpty || responses.isNotEmpty) {
+            String unitCallsign = 'National Rapid Response Unit';
+            if (assignments.isNotEmpty) {
+              final first = assignments.first;
+              unitCallsign = first['unit_callsign']?.toString() ??
+                  first['agency_type']?.toString()?.toUpperCase() ??
+                  unitCallsign;
+            } else if (responses.isNotEmpty) {
+              final first = responses.first;
+              unitCallsign = first['agency']?.toString()?.toUpperCase() ?? unitCallsign;
+            }
+            setState(() {
+              _isDispatched = true;
+              _responderName = unitCallsign;
+              final eta = details['eta_minutes'] ??
+                  (assignments.isNotEmpty ? assignments.first['eta_minutes'] : null);
+              if (eta != null) {
+                _responderETA = '~$eta mins';
+              }
+            });
+          }
+        }
+      } catch (e) {
+        print('Dispatch polling error: $e');
+      }
+    });
+  }
+
   Future<void> _stopSOS() async {
     _flashController.stop();
     _backgroundTrackingTimer?.cancel();
     _backgroundTrackingTimer = null;
+    _dispatchPollingTimer?.cancel();
+    _dispatchPollingTimer = null;
     _blinkTimer?.cancel();
     final incidentId = _activeIncidentId;
     setState(() {
@@ -2364,7 +2424,7 @@ class _SOSScreenState extends State<SOSScreen> with TickerProviderStateMixin {
                                       : Colors.white,
                                 ),
                                 label: Text(
-                                  'CALL CONTROL',
+                                  'CALL 112',
                                   style: TextStyle(
                                     color: showMap
                                         ? AppTheme.primaryColor
