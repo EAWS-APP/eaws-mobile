@@ -128,6 +128,12 @@ class IncidentApi {
     return null;
   }
 
+  Future<String?> uploadIncidentMedia(
+    dynamic fileOrPath, {
+    String? incidentId,
+    String? mediaType,
+  }) => uploadMedia(fileOrPath, incidentId: incidentId, mediaType: mediaType);
+
   Future<void> deleteIncident(String id) {
     return EawsApiClient.instance.delete('/incidents/$id');
   }
@@ -188,13 +194,19 @@ class IncidentApi {
     return Map<String, dynamic>.from(data['post'] ?? data);
   }
 
-  Future<Map<String, dynamic>> addReply(String postId, String content) async {
+  Future<Map<String, dynamic>> addReply(String postId, String content, {String? imageUrl}) async {
     final data = await EawsApiClient.instance.post(
       '/community/posts/$postId/replies',
-      body: {'content': content},
+      body: {
+        'content': content,
+        if (imageUrl != null) 'image_url': imageUrl,
+      },
     );
     return Map<String, dynamic>.from(data['reply'] ?? data);
   }
+
+  Future<Map<String, dynamic>> addCommunityReply(String postId, String content, {String? imageUrl}) =>
+      addReply(postId, content, imageUrl: imageUrl);
 
   // ── Direct Messages (Citizen ↔ Control Room) ─────────────────────────────────
 

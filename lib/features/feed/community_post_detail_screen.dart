@@ -152,11 +152,24 @@ class _CommunityPostDetailScreenState extends State<CommunityPostDetailScreen> {
 
   Future<void> _submitReply() async {
     final text = _replyController.text.trim();
-    if (text.isEmpty) return;
+    if (text.isEmpty && _selectedMediaFile == null) return;
 
     setState(() => _isSubmitting = true);
     HapticFeedback.mediumImpact();
 
+    String? uploadedUrl;
+    if (_selectedMediaFile != null) {
+      try {
+        uploadedUrl = await IncidentApi.instance.uploadIncidentMedia(
+          _selectedMediaFile!,
+          mediaType: 'image',
+        );
+      } catch (uploadErr) {
+        debugPrint('EAWS reply media upload failed: $uploadErr');
+      }
+    }
+
+    final mediaPath = uploadedUrl ?? _selectedMediaFile?.path;
     final authorName = widget.report['userName'] ?? 'Ayettey Ebenezer';
     final authorInitials = widget.report['initials'] ?? (authorName.split(' ').map((w) => w[0]).take(2).join().toUpperCase());
 
@@ -165,7 +178,7 @@ class _CommunityPostDetailScreenState extends State<CommunityPostDetailScreen> {
       'author_name': authorName,
       'author_initials': authorInitials,
       'content': text,
-      'imageAsset': _selectedMediaFile?.path,
+      'imageAsset': mediaPath,
       'created_at': DateTime.now().toIso8601String(),
     };
 
@@ -191,7 +204,11 @@ class _CommunityPostDetailScreenState extends State<CommunityPostDetailScreen> {
 
     // Sync with backend API (fire and forget)
     try {
-      await IncidentApi.instance.addReply(_postId, text);
+      await IncidentApi.instance.addCommunityReply(
+        _postId,
+        text,
+        imageUrl: mediaPath,
+      );
     } catch (e) {
       debugPrint('Syncing reply with backend failed: $e');
     }

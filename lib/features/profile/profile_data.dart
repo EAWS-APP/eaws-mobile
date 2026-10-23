@@ -1,6 +1,7 @@
 import 'package:eaws_app/core/supabase_mock.dart';
 import '../../core/user_session.dart';
 import '../../core/user_data_store.dart';
+import '../../core/api_client.dart';
 
 class ProfileData {
   static String fullName = UserSession.instance.displayName;
@@ -47,7 +48,27 @@ class ProfileData {
       medications = profile['medications'] ?? medications;
       communicationPreference = profile['communicationPreference'] ?? communicationPreference;
 
-      // 3. Sync with active Supabase user metadata if connected
+      // 3. Sync with live Express backend GET /api/me
+      try {
+        final res = await EawsApiClient.instance.get('/me');
+        final remoteProfile = res?['profile'] ?? res?['user']?['user_metadata'];
+        if (remoteProfile is Map) {
+          fullName = remoteProfile['full_name'] ?? remoteProfile['fullName'] ?? fullName;
+          email = remoteProfile['email'] ?? email;
+          phone = remoteProfile['phone_number'] ?? remoteProfile['phone'] ?? phone;
+          dob = remoteProfile['dob'] ?? dob;
+          bloodType = remoteProfile['blood_type'] ?? remoteProfile['blood_group'] ?? remoteProfile['bloodType'] ?? bloodType;
+          medicalConditions = remoteProfile['medical_conditions'] ?? remoteProfile['chronic_illnesses'] ?? remoteProfile['medicalConditions'] ?? medicalConditions;
+          homeAddress = remoteProfile['home_address'] ?? remoteProfile['homeAddress'] ?? homeAddress;
+          allergies = remoteProfile['allergies'] ?? allergies;
+          medications = remoteProfile['medications'] ?? medications;
+          communicationPreference = remoteProfile['communication_preference'] ?? remoteProfile['communicationPreference'] ?? communicationPreference;
+        }
+      } catch (apiErr) {
+        print('EAWS GET /me sync note: $apiErr');
+      }
+
+      // 4. Sync with active Supabase user metadata if connected
       final user = Supabase.instance.client.auth.currentUser;
       if (user != null) {
         fullName = user.userMetadata?['full_name'] ?? fullName;
@@ -78,6 +99,23 @@ class ProfileData {
 
       // Update UserSession
       UserSession.instance.setDisplayName(fullName, email: email, phone: phone);
+
+      // Save to Express backend via PATCH /me
+      try {
+        await EawsApiClient.instance.patch('/me', body: {
+          'full_name': fullName,
+          'phone_number': phone,
+          'dob': dob,
+          'blood_type': bloodType,
+          'medical_conditions': medicalConditions,
+          'home_address': homeAddress,
+          'allergies': allergies,
+          'medications': medications,
+          'communication_preference': communicationPreference,
+        });
+      } catch (patchErr) {
+        print('EAWS saveToSession PATCH /me note: $patchErr');
+      }
 
       // Save to Supabase Auth if connected
       final client = Supabase.instance.client;

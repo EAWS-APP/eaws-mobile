@@ -140,8 +140,10 @@ class GoTrueClient {
 
   Future<void> signInWithOtp({required String phone}) async {
     try {
-      await _postApi('/auth/signin', {'phone': phone, 'password': 'mock_otp_request'});
-    } catch (_) {}
+      await _postApi('/auth/send-otp', {'phone': phone});
+    } catch (e) {
+      print('signInWithOtp error (fallback): $e');
+    }
   }
 
   Future<AuthResponse> verifyOTP({
@@ -149,16 +151,53 @@ class GoTrueClient {
     required String token,
     required OtpType type,
   }) async {
-    final sessionToken = 'mock-token-$phone';
-    currentUser = User(
-      id: 'mock-uuid',
-      email: '$phone@eaws.gov.gh',
-      phone: phone,
-      userMetadata: {'phone_number': phone, 'is_approved': true},
-    );
-    currentSession = Session(accessToken: sessionToken);
-    EawsApiClient.instance.setAuthToken(sessionToken);
-    return AuthResponse(user: currentUser, session: currentSession);
+    try {
+      final res = await _postApi('/auth/verify-otp', {
+        'phone': phone,
+        'token': token,
+        'code': token,
+      });
+
+      final userData = res['user'];
+      final sessionData = res['session'];
+
+      final userId = userData?['id']?.toString() ?? 'mock-uuid';
+      final email = userData?['email']?.toString() ?? '$phone@eaws.gov.gh';
+      final sessionToken = sessionData?['access_token']?.toString() ?? 'insforge-otp-$userId';
+      final userMeta = userData?['user_metadata'] is Map
+          ? Map<String, dynamic>.from(userData['user_metadata'])
+          : {'phone_number': phone, 'is_approved': true};
+
+      currentUser = User(
+        id: userId,
+        email: email,
+        phone: phone,
+        userMetadata: userMeta,
+      );
+      currentSession = Session(accessToken: sessionToken);
+      EawsApiClient.instance.setAuthToken(sessionToken);
+
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString('eaws_cached_user_email', email);
+      if (userMeta['full_name'] != null) {
+        await prefs.setString('eaws_cached_user_name', userMeta['full_name'].toString());
+      }
+      await prefs.setString('eaws_cached_user_phone', phone);
+
+      return AuthResponse(user: currentUser, session: currentSession);
+    } catch (e) {
+      print('verifyOTP backend call failed, falling back to offline sandbox: $e');
+      final sessionToken = 'mock-token-$phone';
+      currentUser = User(
+        id: 'mock-uuid',
+        email: '$phone@eaws.gov.gh',
+        phone: phone,
+        userMetadata: {'phone_number': phone, 'is_approved': true},
+      );
+      currentSession = Session(accessToken: sessionToken);
+      EawsApiClient.instance.setAuthToken(sessionToken);
+      return AuthResponse(user: currentUser, session: currentSession);
+    }
   }
 
   Future<void> resetPasswordForEmail(String email) async {

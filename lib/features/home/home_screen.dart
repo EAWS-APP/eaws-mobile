@@ -39,9 +39,9 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
   late AnimationController _pulseController;
 
   // Live System GPS Location State
-  String _currentLocationName = 'Locating...';
-  double _latitude = 1.3521;
-  double _longitude = 103.8198;
+  String _currentLocationName = 'Accra, Ghana';
+  double _latitude = 5.6037;
+  double _longitude = -0.1870;
   double _accuracy = 3.0;
   bool _locationLoaded = false;
 
@@ -121,10 +121,8 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
         });
       }
 
-      // Calculate nearest zone once we have location
-      if (_locationLoaded) {
-        _updateNearestZone();
-      }
+      // Calculate nearest zone immediately using current or fallback coordinates
+      _updateNearestZone();
     } catch (e) {
       print('Error loading alerts/zones: $e');
       if (mounted) {

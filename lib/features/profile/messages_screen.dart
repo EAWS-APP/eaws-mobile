@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:lucide_icons/lucide_icons.dart';
@@ -79,8 +80,23 @@ class _MessagesScreenState extends State<MessagesScreen> {
     try {
       final XFile? image = await _picker.pickImage(source: ImageSource.gallery, imageQuality: 70);
       if (image != null) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Uploading image evidence...'), backgroundColor: AppTheme.primaryColor),
+        );
+
+        String? uploadedUrl;
+        try {
+          uploadedUrl = await IncidentApi.instance.uploadIncidentMedia(
+            File(image.path),
+            mediaType: 'image',
+          );
+        } catch (uploadErr) {
+          print('Upload via IncidentApi failed: $uploadErr');
+        }
+
+        final finalUrl = uploadedUrl ?? image.path;
         setState(() {
-          _selectedMediaUrl = 'https://images.unsplash.com/photo-1590486803833-1c5dc8ddd4c8?w=600&auto=format&fit=crop';
+          _selectedMediaUrl = finalUrl;
         });
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(content: Text('Image attached. Type message or tap send.'), backgroundColor: AppTheme.primaryColor),
@@ -297,10 +313,23 @@ class _MessagesScreenState extends State<MessagesScreen> {
                   padding: const EdgeInsets.only(bottom: 8.0),
                   child: ClipRRect(
                     borderRadius: BorderRadius.circular(12),
-                    child: Image.network(
-                      msg['media_url'].toString(),
-                      fit: BoxFit.cover,
-                      errorBuilder: (context, error, stackTrace) => const SizedBox.shrink(),
+                    child: Builder(
+                      builder: (context) {
+                        final String mediaUrl = msg['media_url'].toString();
+                        if (mediaUrl.startsWith('http://') || mediaUrl.startsWith('https://')) {
+                          return Image.network(
+                            mediaUrl,
+                            fit: BoxFit.cover,
+                            errorBuilder: (context, error, stackTrace) => const SizedBox.shrink(),
+                          );
+                        } else {
+                          return Image.file(
+                            File(mediaUrl),
+                            fit: BoxFit.cover,
+                            errorBuilder: (context, error, stackTrace) => const SizedBox.shrink(),
+                          );
+                        }
+                      },
                     ),
                   ),
                 ),

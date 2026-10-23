@@ -1,7 +1,9 @@
+import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:lucide_icons/lucide_icons.dart';
 import '../../core/theme.dart';
+import '../../core/api_client.dart';
 import 'reactions_comments_screen.dart';
 
 class IncidentDetailScreen extends StatefulWidget {
@@ -72,22 +74,10 @@ class _IncidentDetailScreenState extends State<IncidentDetailScreen> {
                   SizedBox(height: MediaQuery.of(context).padding.top + 70),
 
                   // Image section with translucent severity tag
-                  if (_localReport['category'] == 'FLOOD') ...[
-                    _buildIncidentHeaderImage(
-                      'https://images.unsplash.com/photo-1547683905-f686c993aae5?auto=format&fit=crop&q=80&w=800',
-                      _localReport['severity'],
-                    ),
-                  ] else if (_localReport['category'] == 'FIRE') ...[
-                    _buildIncidentHeaderImage(
-                      'https://images.unsplash.com/photo-1508873699372-7aeab60b44ab?auto=format&fit=crop&q=80&w=800',
-                      _localReport['severity'],
-                    ),
-                  ] else ...[
-                    _buildIncidentHeaderImage(
-                      'https://images.unsplash.com/photo-1488521787991-ed7bbaae773c?auto=format&fit=crop&q=80&w=800',
-                      _localReport['severity'],
-                    ),
-                  ],
+                  _buildIncidentHeaderImage(
+                    _resolveIncidentMedia() ?? _getCategoryFallbackImage(_localReport['category']?.toString()),
+                    _localReport['severity']?.toString() ?? 'ALERT',
+                  ),
 
                   // Details container
                   Padding(
@@ -686,13 +676,62 @@ class _IncidentDetailScreenState extends State<IncidentDetailScreen> {
     );
   }
 
-  Widget _buildIncidentHeaderImage(String imageUrl, String label) {
+  String? _resolveIncidentMedia() {
+    if (_localReport['imageAsset'] != null && _localReport['imageAsset'].toString().isNotEmpty) {
+      return _localReport['imageAsset'].toString();
+    }
+    if (_localReport['image_url'] != null && _localReport['image_url'].toString().isNotEmpty) {
+      return _localReport['image_url'].toString();
+    }
+    if (_localReport['media_url'] != null && _localReport['media_url'].toString().isNotEmpty) {
+      return _localReport['media_url'].toString();
+    }
+    if (_localReport['incident_media'] is List && (_localReport['incident_media'] as List).isNotEmpty) {
+      final first = (_localReport['incident_media'] as List).first;
+      if (first is Map && (first['file_url'] != null || first['storage_path'] != null)) {
+        return (first['file_url'] ?? first['storage_path']).toString();
+      }
+      return first.toString();
+    }
+    return null;
+  }
+
+  String _getCategoryFallbackImage(String? category) {
+    switch (category?.toUpperCase()) {
+      case 'FLOOD':
+        return 'https://images.unsplash.com/photo-1547683905-f686c993aae5?auto=format&fit=crop&q=80&w=800';
+      case 'FIRE':
+        return 'https://images.unsplash.com/photo-1508873699372-7aeab60b44ab?auto=format&fit=crop&q=80&w=800';
+      case 'MEDICAL':
+        return 'https://images.unsplash.com/photo-1584515979956-d9f6e5d09982?auto=format&fit=crop&q=80&w=800';
+      default:
+        return 'https://images.unsplash.com/photo-1488521787991-ed7bbaae773c?auto=format&fit=crop&q=80&w=800';
+    }
+  }
+
+  Widget _buildIncidentHeaderImage(String imagePathOrUrl, String label) {
+    ImageProvider imageProvider;
+    if (imagePathOrUrl.startsWith('http://') || imagePathOrUrl.startsWith('https://')) {
+      imageProvider = NetworkImage(imagePathOrUrl);
+    } else if (imagePathOrUrl.startsWith('/uploads/')) {
+      imageProvider = NetworkImage('${EawsApiClient.baseUrl.replaceAll('/api', '')}$imagePathOrUrl');
+    } else if (imagePathOrUrl.startsWith('assets/')) {
+      imageProvider = AssetImage(imagePathOrUrl);
+    } else {
+      final file = File(imagePathOrUrl);
+      if (file.existsSync()) {
+        imageProvider = FileImage(file);
+      } else {
+        imageProvider = NetworkImage(_getCategoryFallbackImage(_localReport['category']?.toString()));
+      }
+    }
+
     return Container(
       height: 220,
       width: double.infinity,
       decoration: BoxDecoration(
         image: DecorationImage(
-          image: NetworkImage(imageUrl),
+          image: imageProvider,
           fit: BoxFit.cover,
         ),
       ),

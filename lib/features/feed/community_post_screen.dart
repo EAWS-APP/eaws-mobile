@@ -100,6 +100,20 @@ class _CommunityPostScreenState extends State<CommunityPostScreen> {
 
     setState(() => _isSubmitting = true);
 
+    String? uploadedUrl;
+    if (_selectedMediaFile != null) {
+      try {
+        uploadedUrl = await IncidentApi.instance.uploadIncidentMedia(
+          _selectedMediaFile!,
+          mediaType: !_isImage ? 'video' : 'image',
+        );
+      } catch (uploadErr) {
+        print('EAWS community post media upload failed: $uploadErr');
+      }
+    }
+
+    final mediaPath = uploadedUrl ?? _selectedMediaFile?.path;
+
     // Build local card immediately so the user sees their post right away
     final localPost = <String, dynamic>{
       'id': 'cp-local-${DateTime.now().millisecondsSinceEpoch}',
@@ -121,7 +135,7 @@ class _CommunityPostScreenState extends State<CommunityPostScreen> {
       'commentsCount': 0,
       'replies': <Map<String, dynamic>>[],
       'isLiked': false,
-      'imageAsset': _selectedMediaFile?.path,
+      'imageAsset': mediaPath,
       'isVideo': !_isImage,
       'userId': UserDataStore.instance.userKey, // Explicit attribution for my_reports_screen
     };
@@ -138,7 +152,7 @@ class _CommunityPostScreenState extends State<CommunityPostScreen> {
     try {
       final saved = await IncidentApi.instance.createCommunityPost(
         content: text,
-        imageUrl: _selectedMediaFile?.path,
+        imageUrl: mediaPath,
       );
       // Update the local placeholder with the real server ID
       final list = List<Map<String, dynamic>>.from(communityReportsNotifier.value);
