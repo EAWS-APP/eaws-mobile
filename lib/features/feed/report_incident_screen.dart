@@ -11,6 +11,7 @@ import '../../core/user_session.dart';
 import '../../core/user_data_store.dart';
 import 'community_feed_screen.dart';
 import 'incident_api.dart';
+import '../../core/location_service.dart';
 
 class ReportIncidentScreen extends StatefulWidget {
   const ReportIncidentScreen({super.key});
@@ -36,7 +37,7 @@ class _ReportIncidentScreenState extends State<ReportIncidentScreen> {
   // Location details
   double _latitude = 5.6037;
   double _longitude = -0.1870;
-  String _locationName = 'Accra, Ghana';
+  String _locationName = 'Acquiring location...';
   bool _isLoadingLocation = false;
 
   @override
@@ -48,6 +49,14 @@ class _ReportIncidentScreenState extends State<ReportIncidentScreen> {
         _charCount = _descriptionController.text.length;
       });
     });
+
+    final initialFix = LocationService.instance.bestFix();
+    if (initialFix != null) {
+      _latitude = initialFix.latitude;
+      _longitude = initialFix.longitude;
+      _locationName = '${_latitude.toStringAsFixed(4)}°, ${_longitude.toStringAsFixed(4)}°';
+    }
+
     // Auto fetch user's location
     _fetchCurrentLocation();
   }
@@ -321,19 +330,31 @@ class _ReportIncidentScreenState extends State<ReportIncidentScreen> {
         return;
       }
 
-      if (permission == LocationPermission.whileInUse || permission == LocationPermission.always) {
+      double? lat;
+      double? lng;
+
+      final fix = await LocationService.instance.waitForFix(timeout: const Duration(seconds: 4));
+      if (fix != null) {
+        lat = fix.latitude;
+        lng = fix.longitude;
+      } else {
         final Position position = await Geolocator.getCurrentPosition(
           desiredAccuracy: LocationAccuracy.high,
           timeLimit: const Duration(seconds: 4),
         );
+        lat = position.latitude;
+        lng = position.longitude;
+      }
+
+      if (lat != null && lng != null) {
         setState(() {
-          _latitude = position.latitude;
-          _longitude = position.longitude;
+          _latitude = lat!;
+          _longitude = lng!;
         });
 
         // Query OSM dynamic Nominatim geocoding to resolve address name
         final client = HttpClient();
-        final url = Uri.parse('https://nominatim.openstreetmap.org/reverse?format=json&lat=${position.latitude}&lon=${position.longitude}&zoom=18&addressdetails=1');
+        final url = Uri.parse('https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lng}&zoom=18&addressdetails=1');
         final request = await client.getUrl(url);
         request.headers.set('User-Agent', 'EAWSMobileApp/1.0 (masters@eaws.org)');
         final response = await request.close();

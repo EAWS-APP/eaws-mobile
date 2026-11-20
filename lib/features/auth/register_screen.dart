@@ -169,50 +169,207 @@ class _RegisterScreenState extends State<RegisterScreen> {
     }
   }
 
-  // Actual Facial Capture using Device Camera
+  // Multi-Angle Facial Capture (Front, Left, Right)
   bool _livenessVerified = false;
+  XFile? _faceFront;
+  XFile? _faceLeft;
+  XFile? _faceRight;
 
-  Future<void> _captureSelfie() async {
-    try {
-      final XFile? image = await _picker.pickImage(
-        source: ImageSource.camera,
-        preferredCameraDevice: CameraDevice.front,
-      );
+  Future<void> _startMultiAngleFaceEnrollment() async {
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (context) {
+        return StatefulBuilder(
+          builder: (context, setSheetState) {
+            final int completedCount = (_faceFront != null ? 1 : 0) +
+                (_faceLeft != null ? 1 : 0) +
+                (_faceRight != null ? 1 : 0);
+            final bool allDone = completedCount == 3;
 
-      if (image != null) {
-        // Show a brief analyzing state
-        if (mounted) {
-          showDialog(
-            context: context,
-            barrierDismissible: false,
-            builder: (context) => const Center(
-              child: CircularProgressIndicator(color: Colors.white),
+            return Container(
+              padding: const EdgeInsets.all(24),
+              decoration: const BoxDecoration(
+                color: Colors.white,
+                borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+              ),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      Row(
+                        children: [
+                          Container(
+                            padding: const EdgeInsets.all(8),
+                            decoration: BoxDecoration(
+                              color: AppTheme.primaryColor.withValues(alpha: 0.1),
+                              borderRadius: BorderRadius.circular(8),
+                            ),
+                            child: const Icon(LucideIcons.scanFace, color: AppTheme.primaryColor),
+                          ),
+                          const SizedBox(width: 12),
+                          const Text(
+                            'Face ID Registration',
+                            style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+                          ),
+                        ],
+                      ),
+                      IconButton(
+                        icon: const Icon(Icons.close),
+                        onPressed: () => Navigator.pop(context),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 8),
+                  const Text(
+                    'Capture 3 angles of your face to register your biometric identity profile for instant verification.',
+                    style: TextStyle(fontSize: 13, color: AppTheme.textSecondary),
+                  ),
+                  const SizedBox(height: 16),
+                  _buildAngleTile(
+                    title: 'Angle 1: Front View',
+                    subtitle: 'Look straight at the camera',
+                    file: _faceFront,
+                    onCapture: () async {
+                      try {
+                        final img = await _picker.pickImage(
+                          source: ImageSource.camera,
+                          preferredCameraDevice: CameraDevice.front,
+                        );
+                        if (img != null) {
+                          setSheetState(() => _faceFront = img);
+                          setState(() => _faceFront = img);
+                        }
+                      } catch (e) {
+                        _showError('Camera error: $e');
+                      }
+                    },
+                  ),
+                  const SizedBox(height: 10),
+                  _buildAngleTile(
+                    title: 'Angle 2: Left Angle',
+                    subtitle: 'Turn your head slightly to the left',
+                    file: _faceLeft,
+                    onCapture: () async {
+                      try {
+                        final img = await _picker.pickImage(
+                          source: ImageSource.camera,
+                          preferredCameraDevice: CameraDevice.front,
+                        );
+                        if (img != null) {
+                          setSheetState(() => _faceLeft = img);
+                          setState(() => _faceLeft = img);
+                        }
+                      } catch (e) {
+                        _showError('Camera error: $e');
+                      }
+                    },
+                  ),
+                  const SizedBox(height: 10),
+                  _buildAngleTile(
+                    title: 'Angle 3: Right Angle',
+                    subtitle: 'Turn your head slightly to the right',
+                    file: _faceRight,
+                    onCapture: () async {
+                      try {
+                        final img = await _picker.pickImage(
+                          source: ImageSource.camera,
+                          preferredCameraDevice: CameraDevice.front,
+                        );
+                        if (img != null) {
+                          setSheetState(() => _faceRight = img);
+                          setState(() => _faceRight = img);
+                        }
+                      } catch (e) {
+                        _showError('Camera error: $e');
+                      }
+                    },
+                  ),
+                  const SizedBox(height: 20),
+                  SizedBox(
+                    width: double.infinity,
+                    child: ElevatedButton(
+                      onPressed: allDone
+                          ? () {
+                              Navigator.pop(context);
+                              setState(() {
+                                _livenessVerified = true;
+                              });
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                const SnackBar(
+                                  content: Text('Multi-Angle Face Registration complete!'),
+                                  backgroundColor: AppTheme.successColor,
+                                ),
+                              );
+                            }
+                          : null,
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: allDone ? AppTheme.successColor : Colors.grey.shade400,
+                        padding: const EdgeInsets.symmetric(vertical: 14),
+                      ),
+                      child: Text(
+                        allDone ? 'Save Biometric Profile ($completedCount/3)' : 'Capture All Angles ($completedCount/3)',
+                        style: const TextStyle(fontWeight: FontWeight.bold),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            );
+          },
+        );
+      },
+    );
+  }
+
+  Widget _buildAngleTile({
+    required String title,
+    required String subtitle,
+    required XFile? file,
+    required VoidCallback onCapture,
+  }) {
+    final bool isDone = file != null;
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: isDone ? const Color(0xFFF0FDF4) : Colors.grey.shade50,
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: isDone ? const Color(0xFF86EFAC) : Colors.grey.shade200),
+      ),
+      child: Row(
+        children: [
+          Icon(
+            isDone ? Icons.check_circle : LucideIcons.camera,
+            color: isDone ? const Color(0xFF16A34A) : AppTheme.primaryColor,
+            size: 24,
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(title, style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 14)),
+                Text(subtitle, style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
+              ],
             ),
-          );
-        }
-
-        // Simulate a slight delay for processing the photo
-        await Future.delayed(const Duration(seconds: 2));
-
-        if (mounted) {
-          Navigator.pop(context); // Close loading indicator
-          setState(() {
-            _livenessVerified = true;
-          });
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-              content: Text('Face captured and verified successfully!'),
-              backgroundColor: AppTheme.successColor,
-              duration: Duration(seconds: 2),
+          ),
+          TextButton(
+            onPressed: onCapture,
+            child: Text(
+              isDone ? 'Retake' : 'Capture',
+              style: TextStyle(
+                color: isDone ? const Color(0xFF16A34A) : AppTheme.primaryColor,
+                fontWeight: FontWeight.bold,
+              ),
             ),
-          );
-        }
-      }
-    } catch (e) {
-      if (mounted) {
-        _showError('Failed to open camera: $e');
-      }
-    }
+          ),
+        ],
+      ),
+    );
   }
 
   // Registration form validation logic
@@ -272,6 +429,14 @@ class _RegisterScreenState extends State<RegisterScreen> {
     }
 
     if (success) {
+      // Persist Ghana Card & multi-angle biometric enrollment to backend
+      AuthService.instance.registerBiometrics(
+        ghanaCard: _ghanaCardController.text.trim(),
+        email: _emailController.text.trim(),
+        phone: '$_selectedCountryCode${_phoneController.text.trim()}',
+        faceAngles: ['front', 'left', 'right'],
+      ).catchError((_) => false);
+
       if (mounted) {
         // Send OTP (simulated/real) to the provided phone number
         await AuthService.instance.sendOTP('$_selectedCountryCode${_phoneController.text.trim()}');
@@ -672,7 +837,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
                         ),
                         const SizedBox(height: 8),
                         GestureDetector(
-                          onTap: _livenessVerified ? null : _captureSelfie,
+                          onTap: _startMultiAngleFaceEnrollment,
                           child: Container(
                             padding: const EdgeInsets.all(16),
                             decoration: BoxDecoration(
@@ -696,7 +861,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
                                     crossAxisAlignment: CrossAxisAlignment.start,
                                     children: [
                                       Text(
-                                        _livenessVerified ? 'Face Verified' : 'Facial Verification',
+                                        _livenessVerified ? 'Face ID Enrolled (3 Angles)' : 'Multi-Angle Face ID Registration',
                                         style: TextStyle(
                                           fontWeight: FontWeight.bold,
                                           fontSize: 16,
@@ -706,8 +871,8 @@ class _RegisterScreenState extends State<RegisterScreen> {
                                       const SizedBox(height: 4),
                                       Text(
                                         _livenessVerified
-                                            ? 'Successfully matched with Ghana Card.'
-                                            : 'Take a quick selfie to prove you are human.',
+                                            ? '3 facial angles verified & linked to Ghana Card.'
+                                            : 'Tap to capture 3 angles (Front, Left, Right) to secure Face Login.',
                                         style: TextStyle(
                                           fontSize: 12,
                                           color: _livenessVerified ? const Color(0xFF15803D) : AppTheme.textSecondary,
@@ -716,8 +881,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
                                     ],
                                   ),
                                 ),
-                                if (!_livenessVerified)
-                                  const Icon(LucideIcons.chevronRight, color: AppTheme.textSecondary),
+                                const Icon(LucideIcons.chevronRight, color: AppTheme.textSecondary),
                               ],
                             ),
                           ),

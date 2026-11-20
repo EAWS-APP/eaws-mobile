@@ -1,7 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
-import 'dart:ui' as ui;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:geolocator/geolocator.dart';
@@ -9,12 +8,14 @@ import 'package:lucide_icons/lucide_icons.dart';
 import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:google_maps_flutter/google_maps_flutter.dart';
-import 'package:eaws_app/core/supabase_mock.dart';
 import '../../core/theme.dart';
 import '../../core/user_session.dart';
 import '../../core/user_data_store.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:http/http.dart' as http;
 import 'sos_api.dart';
+import '../../core/location_service.dart';
+import '../../core/webrtc_voice_call_widget.dart';
 
 // Global notifier to control Dashboard bottom nav visibility
 final ValueNotifier<bool> globalSosActiveNotifier = ValueNotifier(false);
@@ -28,7 +29,8 @@ class SOSScreen extends StatefulWidget {
   State<SOSScreen> createState() => _SOSScreenState();
 }
 
-class _SOSScreenState extends State<SOSScreen> with TickerProviderStateMixin {
+class _SOSScreenState extends State<SOSScreen>
+    with TickerProviderStateMixin, WidgetsBindingObserver {
   bool _isSOSActive = false;
   bool _isCountingDown = false;
   int _countdownSeconds = 10;
@@ -39,7 +41,6 @@ class _SOSScreenState extends State<SOSScreen> with TickerProviderStateMixin {
   String _address = 'Acquiring GPS location...';
   double? _gpsAccuracy;
   bool _isSilentMode = false;
-  final double _readinessScore = 95.0;
   bool _showRecoveryScreen = false;
   bool _isSilentModeUnlocked = false;
   String _enteredPin = '';
@@ -49,6 +50,264 @@ class _SOSScreenState extends State<SOSScreen> with TickerProviderStateMixin {
   Timer? _dispatchPollingTimer;
   StreamSubscription<List<ConnectivityResult>>? _connectivitySubscription;
 
+
+  // ── Location state (single source of truth: LocationService) ───────────────
+  // Rule: coordinates are NEVER fabricated. No fix => SOS is sent as
+  // location_status 'pending' and upgraded the moment GPS locks.
+  final LocationService _loc = LocationService.instance;
+  GpsReadiness _gpsReadiness = GpsReadiness.acquiring;
+  bool _trackingActive = false; // live SOS tracking (foreground service) on
+  bool _locationPending = false; // SOS was sent without coordinates
+  bool _addressResolved = false; // _address came from real reverse-geocoding
+  bool _contactsNotified = false;
+  Timer? _contactsFallbackTimer;
+  double? _lastSentLat;
+  double? _lastSentLng;
+  double? _lastSentAccuracy;
+  DateTime? _lastGeocodeAt;
+  double? _lastGeocodeLat;
+  double? _lastGeocodeLng;
+  String _routedToLabel = '';
+
+  Future<void> _initLocation() async {
+    _loc.latestFix.addListener(_onLocationFix);
+    _loc.readiness.addListener(_onReadinessChanged);
+    await _loc.start(foreground: false); // warm-up stream keeps the GPS chip hot
+    _onReadinessChanged();
+    _onLocationFix();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    // Returning from system settings: re-check permission / precision / GPS toggle.
+    if (state == AppLifecycleState.resumed) {
+      _loc
+          .ensureReady(requestIfNeeded: false)
+          .then((_) => _loc.start(foreground: _trackingActive));
+    }
+  }
+
+  void _onReadinessChanged() {
+    if (!mounted) return;
+    setState(() => _gpsReadiness = _loc.readiness.value);
+  }
+
+  void _onLocationFix() {
+    final fix = _loc.latestFix.value;
+    if (fix == null || !mounted) return;
+    setState(() {
+      _latitude = fix.latitude;
+      _longitude = fix.longitude;
+      _gpsAccuracy = fix.accuracy;
+    });
+    if (_trackingActive && fix.source == FixSource.gps) _pushLiveLocation(fix);
+  }
+
+  /// Sends a breadcrumb when: first fix after a 'pending' SOS, moved > 10 m,
+  /// or accuracy improved by > 40 %. Otherwise skipped (saves data/battery).
+  Future<void> _pushLiveLocation(LocationFix fix) async {
+    final incidentId = _activeIncidentId;
+    if (incidentId == null || incidentId.startsWith('mock-') || !_isSOSActive) return;
+
+    final bool firstFix = _locationPending || _lastSentLat == null || _lastSentLng == null;
+    final double moved = firstFix
+        ? double.infinity
+        : Geolocator.distanceBetween(_lastSentLat!, _lastSentLng!, fix.latitude, fix.longitude);
+    final bool accuracyImproved =
+        _lastSentAccuracy != null && fix.accuracy < _lastSentAccuracy! * 0.6;
+    if (!firstFix && moved < 10 && !accuracyImproved) return;
+
+    // Claim this update before awaiting to avoid duplicate concurrent sends.
+    _lastSentLat = fix.latitude;
+    _lastSentLng = fix.longitude;
+    _lastSentAccuracy = fix.accuracy;
+    final bool wasPending = _locationPending;
+    if (wasPending && mounted) {
+      setState(() {
+        _locationPending = false;
+        _address = _lookupGhanaGeofenceLandmark(fix.latitude, fix.longitude);
+      });
+    }
+
+    await SosApi.instance.updateSosLocation(
+      incidentId,
+      latitude: fix.latitude,
+      longitude: fix.longitude,
+      accuracy: fix.accuracy,
+      locationName: _addressResolved ? _address : null,
+    );
+
+    if (wasPending) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('GPS locked — your exact location has been sent to responders.'),
+            backgroundColor: AppTheme.successColor,
+          ),
+        );
+      }
+      _contactsFallbackTimer?.cancel();
+      _notifyContactsOnce(fix.latitude, fix.longitude);
+    }
+    _maybeResolveAddress(fix.latitude, fix.longitude);
+  }
+
+  /// Reverse-geocode at most every 30 s and only after moving > 75 m.
+  void _maybeResolveAddress(double lat, double lng) {
+    final last = _lastGeocodeAt;
+    if (last != null && _lastGeocodeLat != null && _lastGeocodeLng != null) {
+      final recent = DateTime.now().difference(last) < const Duration(seconds: 30);
+      final near = Geolocator.distanceBetween(_lastGeocodeLat!, _lastGeocodeLng!, lat, lng) < 75;
+      if (recent || near) return;
+    }
+    _resolveAddressAsync(lat, lng);
+  }
+
+  void _notifyContactsOnce(double? lat, double? lng) {
+    final id = _activeIncidentId;
+    if (_contactsNotified || id == null || id.startsWith('mock-') || _emergencyContacts.isEmpty) {
+      return;
+    }
+    _contactsNotified = true;
+    SosApi.instance.notifyEmergencyContacts(
+      id,
+      contacts: _emergencyContacts,
+      latitude: lat,
+      longitude: lng,
+      locationName: _locationPending ? 'Location pending (GPS acquiring)' : _address,
+    );
+  }
+
+  Future<void> _fixGpsProblem() async {
+    HapticFeedback.lightImpact();
+    switch (_gpsReadiness) {
+      case GpsReadiness.reducedAccuracy:
+        await _loc.requestPreciseAccuracy();
+      case GpsReadiness.denied:
+        await _loc.ensureReady(requestIfNeeded: true);
+      case GpsReadiness.serviceDisabled:
+      case GpsReadiness.deniedForever:
+        await _loc.openFixSettings();
+      case GpsReadiness.ready:
+      case GpsReadiness.acquiring:
+        break;
+    }
+    await _loc.start(foreground: _trackingActive);
+  }
+
+  /// Small status pill: tells the user whether responders will be able to find them.
+  Widget _buildGpsStatusChip({bool onDark = false}) {
+    final bool hasFix = _latitude != null && _longitude != null;
+    final (Color color, IconData icon, String label, String? action) = switch (_gpsReadiness) {
+      GpsReadiness.ready => (
+          const Color(0xFF10B981),
+          LucideIcons.locateFixed,
+          _gpsAccuracy != null
+              ? 'GPS ready · ±${_gpsAccuracy!.toStringAsFixed(0)} m'
+              : 'GPS ready',
+          null,
+        ),
+      GpsReadiness.acquiring => (
+          const Color(0xFFF59E0B),
+          LucideIcons.crosshair,
+          hasFix ? 'Locking GPS… using recent position' : 'Acquiring GPS…',
+          null,
+        ),
+      GpsReadiness.reducedAccuracy => (
+          const Color(0xFFDC2626),
+          LucideIcons.alertTriangle,
+          'Approximate location only — responders may not find you',
+          'Fix',
+        ),
+      GpsReadiness.serviceDisabled => (
+          const Color(0xFFDC2626),
+          LucideIcons.mapPinOff,
+          'Location is turned off',
+          'Turn on',
+        ),
+      GpsReadiness.denied => (
+          const Color(0xFFDC2626),
+          LucideIcons.mapPinOff,
+          'Location permission needed',
+          'Allow',
+        ),
+      GpsReadiness.deniedForever => (
+          const Color(0xFFDC2626),
+          LucideIcons.mapPinOff,
+          'Location blocked in settings',
+          'Open settings',
+        ),
+    };
+
+    return Material(
+      key: const ValueKey('sos_gps_status_chip'),
+      color: color.withValues(alpha: onDark ? 0.18 : 0.10),
+      borderRadius: BorderRadius.circular(12),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(12),
+        onTap: action == null ? null : _fixGpsProblem,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(icon, size: 18, color: color),
+              const SizedBox(width: 8),
+              Flexible(
+                child: Text(
+                  label,
+                  style: TextStyle(
+                    color: onDark ? Colors.white : AppTheme.textPrimary,
+                    fontSize: 13,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ),
+              if (action != null) ...[
+                const SizedBox(width: 10),
+                Text(
+                  action,
+                  style: TextStyle(
+                    color: color,
+                    fontWeight: FontWeight.bold,
+                    fontSize: 13,
+                  ),
+                ),
+              ],
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  String _lookupGhanaGeofenceLandmark(double lat, double lng) {
+    if (lat >= 5.550 && lat <= 5.575 && lng >= -0.225 && lng <= -0.200) {
+      return 'Kwame Nkrumah Circle & Interchange, Accra';
+    } else if (lat >= 5.640 && lat <= 5.730 && lng >= -0.060 && lng <= 0.050) {
+      return 'Tema Metropolitan Area (Industrial / Community Sector)';
+    } else if (lat >= 5.550 && lat <= 5.578 && lng >= -0.250 && lng <= -0.225) {
+      return 'Kaneshie & Abossey Okai Commercial Sector, Accra';
+    } else if (lat >= 5.625 && lat <= 5.670 && lng >= -0.175 && lng <= -0.130) {
+      return 'East Legon / Bawaleshie Sector, Accra';
+    } else if (lat >= 5.608 && lat <= 5.628 && lng >= -0.190 && lng <= -0.155) {
+      return 'Accra Mall & Spanner Junction, Spintex Rd';
+    } else if (lat >= 5.580 && lat <= 5.608 && lng >= -0.195 && lng <= -0.165) {
+      return 'Airport Residential Area & 37 Military Sector, Accra';
+    } else if (lat >= 5.545 && lat <= 5.580 && lng >= -0.190 && lng <= -0.150) {
+      return 'Osu & Cantonments Sector, Accra';
+    } else if (lat >= 5.530 && lat <= 5.555 && lng >= -0.220 && lng <= -0.190) {
+      return 'Makola & Central Business District, Accra';
+    } else if (lat >= 5.670 && lat <= 5.730 && lng >= -0.170 && lng <= -0.130) {
+      return 'Madina & Adenta Municipal Sector, Accra';
+    } else if (lat >= 5.595 && lat <= 5.635 && lng >= -0.245 && lng <= -0.210) {
+      return 'Lapaz & Achimota Sector, Accra';
+    } else if (lat >= 5.525 && lat <= 5.565 && lng >= -0.265 && lng <= -0.225) {
+      return 'Dansoman & Korle Bu Sector, Accra';
+    }
+    return 'Live GPS Sector (${lat.toStringAsFixed(4)}° N, ${lng.abs().toStringAsFixed(4)}° W)';
+  }
+
   // Per-user SOS history (loaded from UserDataStore)
   List<Map<String, dynamic>> _sosHistory = [];
 
@@ -56,13 +315,22 @@ class _SOSScreenState extends State<SOSScreen> with TickerProviderStateMixin {
   bool _isDispatched = false;
   double? _responderLat;
   double? _responderLng;
-  String _responderETA = '~8 mins';
-  String _responderName = 'Police Response Unit';
+  String _responderETA = '';
+  String _responderName = '';
   GoogleMapController? _mapController;
   Timer? _simulationTimer;
   Timer? _blinkTimer;
   bool _isRedDotVisible = true;
   BitmapDescriptor? _responderIcon;
+
+  // Sprint B & C State (Jurisdiction, Category Auto-Routing & Dispatch Lifecycle)
+  List<Map<String, dynamic>> _statusEvents = [];
+  List<String> _routedAgencies = [];
+  String? _responderUnitType;
+  String? _responderStatus;
+  String? _incidentStatus;
+  bool _isAcknowledged = false;
+  bool _showTimelineExpanded = true;
 
   // Radar pulsing animation
   late AnimationController _radarController;
@@ -105,6 +373,8 @@ class _SOSScreenState extends State<SOSScreen> with TickerProviderStateMixin {
 
     _loadContacts();
     _loadSosHistory();
+    WidgetsBinding.instance.addObserver(this);
+    _initLocation();
     _connectivitySubscription = Connectivity().onConnectivityChanged.listen((
       List<ConnectivityResult> results,
     ) {
@@ -188,6 +458,11 @@ class _SOSScreenState extends State<SOSScreen> with TickerProviderStateMixin {
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    _loc.latestFix.removeListener(_onLocationFix);
+    _loc.readiness.removeListener(_onReadinessChanged);
+    _contactsFallbackTimer?.cancel();
+    _loc.stop();
     _countdownTimer?.cancel();
     _backgroundTrackingTimer?.cancel();
     _dispatchPollingTimer?.cancel();
@@ -204,6 +479,8 @@ class _SOSScreenState extends State<SOSScreen> with TickerProviderStateMixin {
   void _triggerCountdown() {
     // Vibrate device briefly to notify user SOS triggered
     HapticFeedback.vibrate();
+    // The 10s countdown is the GPS warm-up window (asks for permission if missing).
+    _loc.start(foreground: false);
 
     setState(() {
       _isCountingDown = true;
@@ -235,6 +512,7 @@ class _SOSScreenState extends State<SOSScreen> with TickerProviderStateMixin {
     _dispatchPollingTimer = null;
     _blinkTimer?.cancel();
     _flashController.stop();
+    _stopLiveTracking();
     final incidentId = _activeIncidentId;
     setState(() {
       _isCountingDown = false;
@@ -266,6 +544,9 @@ class _SOSScreenState extends State<SOSScreen> with TickerProviderStateMixin {
     setState(() {
       _isCountingDown = false;
       _isSOSActive = true;
+      _isDispatched = false;
+      _responderName = '';
+      _responderETA = '';
       _address = 'Acquiring GPS location...';
     });
 
@@ -276,111 +557,104 @@ class _SOSScreenState extends State<SOSScreen> with TickerProviderStateMixin {
     final connectivityResult = await Connectivity().checkConnectivity();
     if (connectivityResult == [ConnectivityResult.none] ||
         connectivityResult.contains(ConnectivityResult.none)) {
-      _triggerOfflineSMSFallback();
+      await _triggerOfflineSMSFallback();
       return;
     }
 
+    // 2. Best trustworthy fix. The 10s countdown was the GPS warm-up window.
+    //    Coordinates are NEVER fabricated: no fix => SOS goes out with
+    //    location_status 'pending' and is upgraded the moment GPS locks.
+    final LocationFix? fix = await _loc.waitForFix(timeout: const Duration(seconds: 3));
+    final double? lat = fix?.latitude;
+    final double? lng = fix?.longitude;
+    final double? accuracy = fix?.accuracy;
+
+    setState(() {
+      _locationPending = fix == null;
+      _addressResolved = false;
+      _contactsNotified = false;
+      _routedToLabel = '';
+      _lastSentLat = lat;
+      _lastSentLng = lng;
+      _lastSentAccuracy = accuracy;
+      if (fix != null) {
+        _latitude = fix.latitude;
+        _longitude = fix.longitude;
+        _gpsAccuracy = fix.accuracy;
+        _address = _lookupGhanaGeofenceLandmark(fix.latitude, fix.longitude);
+      } else {
+        // Don't show a stale pin on the map while pending.
+        _latitude = null;
+        _longitude = null;
+        _gpsAccuracy = null;
+        _address = 'Acquiring GPS fix (location pending)';
+      }
+    });
+
     try {
-      // 2. Query high-accuracy GPS coordinates
-      final position = await Geolocator.getCurrentPosition(
-        desiredAccuracy: LocationAccuracy.high,
-        timeLimit: const Duration(seconds: 6),
-      );
-
-      setState(() {
-        _latitude = position.latitude;
-        _longitude = position.longitude;
-        _gpsAccuracy = position.accuracy;
-      });
-
-      // 3. Resolve address from OSM Nominatim reverse geocoder
-      String resolvedAddress =
-          '${position.latitude.toStringAsFixed(5)}, ${position.longitude.toStringAsFixed(5)}';
-      try {
-        final client = HttpClient();
-        final url = Uri.parse(
-          'https://nominatim.openstreetmap.org/reverse?format=json&lat=${position.latitude}&lon=${position.longitude}&zoom=18&addressdetails=1',
-        );
-        final request = await client.getUrl(url);
-        request.headers.set(
-          'User-Agent',
-          'EAWSMobileApp/1.0 (masters@eaws.org)',
-        );
-        final response = await request.close();
-        final responseBody = await response.transform(utf8.decoder).join();
-        final data = json.decode(responseBody);
-        if (data != null && data['address'] != null) {
-          final addr = data['address'];
-          final poi =
-              addr['amenity'] ??
-              addr['building'] ??
-              addr['shop'] ??
-              addr['office'] ??
-              '';
-          final road = addr['road'] ?? addr['street'] ?? addr['highway'] ?? '';
-          final city = addr['city'] ?? addr['town'] ?? addr['village'] ?? '';
-          final country = addr['country'] ?? '';
-
-          List<String> parts = [];
-          if (poi.isNotEmpty) parts.add(poi);
-          if (road.isNotEmpty) parts.add(road);
-          if (city.isNotEmpty) parts.add(city);
-          if (parts.isEmpty && country.isNotEmpty) parts.add(country);
-
-          if (parts.isNotEmpty) {
-            resolvedAddress = parts.join(', ');
-          }
-        }
-      } catch (geocodingErr) {
-        print('Nominatim reverse geocoding unavailable: $geocodingErr');
-      }
-
-      setState(() {
-        _address = resolvedAddress;
-      });
-
-      // 4. Connect to database backend
+      // 3. Connect to database backend immediately (do not block on geocoding)
       final sos = await SosApi.instance.createSos(
-        latitude: position.latitude,
-        longitude: position.longitude,
-        accuracy: position.accuracy,
-        locationName: resolvedAddress,
+        latitude: lat,
+        longitude: lng,
+        accuracy: accuracy,
+        locationName: _address,
+        locationSource: fix?.source.wire ?? 'none',
+        locationFixAt: fix?.timestamp,
       );
 
+      final incident = sos['incident'] ?? sos;
+      final returnedId = incident['id']?.toString() ?? incident['incident_id']?.toString();
+
       setState(() {
-        final incident = sos['incident'] ?? sos;
-        _activeIncidentId =
-            incident['id']?.toString() ?? incident['incident_id']?.toString();
+        _activeIncidentId = returnedId;
+        _routedToLabel = incident['routed_to_label']?.toString() ??
+            incident['metadata']?['routed_to_label']?.toString() ??
+            '';
       });
 
-      // 5. Start background tracking timer & notify emergency contacts
-      _startBackgroundTracking();
-
-      if (_activeIncidentId != null && _emergencyContacts.isNotEmpty) {
-        SosApi.instance.notifyEmergencyContacts(
-          _activeIncidentId!,
-          contacts: _emergencyContacts,
-          latitude: position.latitude,
-          longitude: position.longitude,
-          locationName: resolvedAddress,
-        );
+      // If backend was unreachable and returned a mock fallback ID, also launch SMS fallback
+      final isOfflineMock = returnedId == null || returnedId.startsWith('mock-');
+      if (isOfflineMock) {
+        print('Backend SOS returned mock ID ($returnedId). Launching SMS Emergency Fallback.');
+        await _triggerOfflineSMSFallback();
       }
 
-      // 6. Start real dispatch polling & visual responder simulation
+      // 4. Live tracking via foreground-service GPS stream (survives screen-lock)
+      _startBackgroundTracking();
+      _startLocationBlink();
+
+      // 5. Notify emergency contacts. With a fix: now. Without: as soon as GPS
+      //    locks, or after 20s without coordinates — whichever comes first.
+      if (!isOfflineMock) {
+        if (fix != null) {
+          _notifyContactsOnce(lat, lng);
+        } else {
+          _contactsFallbackTimer?.cancel();
+          _contactsFallbackTimer = Timer(
+            const Duration(seconds: 20),
+            () => _notifyContactsOnce(null, null),
+          );
+        }
+      }
+
+      // 6. Start real dispatch polling for assigned emergency units
       _startDispatchPolling();
-      _startResponderSimulation();
 
       // 7. Save to local history
       _saveSosEvent(
         _selectedCategory.isNotEmpty ? _selectedCategory : 'Police / Threat',
-        resolvedAddress,
+        _address,
         'Active',
       );
+
+      // 8. Reverse-geocode in background asynchronously
+      if (lat != null && lng != null) _resolveAddressAsync(lat, lng);
     } catch (e) {
-      print('EAWS SOS API unavailable, active visual state retained: $e');
+      print('EAWS SOS API failed ($e). Initiating SMS emergency fallback immediately.');
       setState(() {
-        _address = 'Emergency telemetry broadcasting offline...';
+        _address = 'Network offline. Launching SMS Emergency Fallback...';
       });
+      await _triggerOfflineSMSFallback();
     }
   }
 
@@ -389,32 +663,23 @@ class _SOSScreenState extends State<SOSScreen> with TickerProviderStateMixin {
       _address = 'Offline. Initiating SMS Emergency Fallback...';
     });
 
-    double lat = 5.6037; // Default Accra latitude
-    double lng = -0.1870; // Default Accra longitude
-
-    try {
-      final position = await Geolocator.getCurrentPosition(
-        desiredAccuracy: LocationAccuracy.medium,
-        timeLimit: const Duration(seconds: 4),
-      );
-      lat = position.latitude;
-      lng = position.longitude;
+    // GPS works without internet. Never substitute fake coordinates.
+    _loc.start(foreground: true);
+    final LocationFix? fix = await _loc.waitForFix(timeout: const Duration(seconds: 6));
+    if (fix != null && mounted) {
       setState(() {
-        _latitude = lat;
-        _longitude = lng;
-        _gpsAccuracy = position.accuracy;
-      });
-    } catch (_) {
-      // Fallback coordinates if GPS times out
-      setState(() {
-        _latitude = lat;
-        _longitude = lng;
+        _latitude = fix.latitude;
+        _longitude = fix.longitude;
+        _gpsAccuracy = fix.accuracy;
       });
     }
 
     final String userName = UserSession.instance.displayName;
+    final String locationText = fix != null
+        ? 'Location: Lat ${fix.latitude.toStringAsFixed(5)}, Lng ${fix.longitude.toStringAsFixed(5)} (+/-${fix.accuracy.toStringAsFixed(0)}m) https://maps.google.com/?q=${fix.latitude},${fix.longitude}'
+        : 'Location: GPS not yet available - please call me back to locate me.';
     final String message =
-        'EAWS EMERGENCY SOS! $userName has triggered an emergency alert. Location: Lat ${lat.toStringAsFixed(5)}, Lng ${lng.toStringAsFixed(5)} (https://maps.google.com/?q=$lat,$lng). Please respond immediately.';
+        'EAWS EMERGENCY SOS! $userName has triggered an emergency alert. $locationText. Please respond immediately.';
 
     // Include 112 + all saved emergency contacts (stripped of spaces for iOS compatibility)
     String separator = Platform.isAndroid ? ';' : ',';
@@ -434,6 +699,7 @@ class _SOSScreenState extends State<SOSScreen> with TickerProviderStateMixin {
 
     if (await canLaunchUrl(smsUri)) {
       await launchUrl(smsUri);
+      if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
           content: Text('Offline SMS composer pre-populated and launched!'),
@@ -441,12 +707,72 @@ class _SOSScreenState extends State<SOSScreen> with TickerProviderStateMixin {
         ),
       );
     } else {
+      if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
           content: Text('Failed to launch SMS composer automatically.'),
           backgroundColor: AppTheme.errorColor,
         ),
       );
+    }
+  }
+
+  void _resolveAddressAsync(double lat, double lng) async {
+    String resolvedAddress = _lookupGhanaGeofenceLandmark(lat, lng);
+    bool geocoded = false;
+    _lastGeocodeAt = DateTime.now();
+    _lastGeocodeLat = lat;
+    _lastGeocodeLng = lng;
+    try {
+      final url = Uri.parse(
+        'https://nominatim.openstreetmap.org/reverse?format=json&lat=$lat&lon=$lng&zoom=18&addressdetails=1',
+      );
+      final res = await http.get(url, headers: {
+        'User-Agent': 'EAWSMobileApp/1.0 (emergency@eaws.gov.gh)',
+        'Accept': 'application/json',
+      }).timeout(const Duration(seconds: 4));
+
+      if (res.statusCode == 200) {
+        final data = json.decode(res.body);
+        if (data != null && data['address'] != null && mounted) {
+          final addr = data['address'];
+          final poi = addr['amenity'] ?? addr['building'] ?? addr['shop'] ?? addr['office'] ?? '';
+          final quarter = addr['suburb'] ?? addr['quarter'] ?? addr['neighbourhood'] ?? '';
+          final road = addr['road'] ?? addr['street'] ?? addr['highway'] ?? '';
+          final city = addr['city'] ?? addr['town'] ?? addr['village'] ?? addr['county'] ?? '';
+
+          List<String> parts = [];
+          if (poi.toString().isNotEmpty) parts.add(poi.toString());
+          if (quarter.toString().isNotEmpty && !parts.contains(quarter.toString())) parts.add(quarter.toString());
+          if (road.toString().isNotEmpty && !parts.contains(road.toString())) parts.add(road.toString());
+          if (city.toString().isNotEmpty && !parts.contains(city.toString())) parts.add(city.toString());
+
+          if (parts.isNotEmpty) {
+            resolvedAddress = parts.join(', ');
+            geocoded = true;
+          }
+        }
+      }
+    } catch (e) {
+      print('Nominatim reverse geocode lookup: $e');
+    }
+
+    if (mounted) {
+      setState(() {
+        _address = resolvedAddress;
+        _addressResolved = geocoded;
+      });
+      final incId = _activeIncidentId;
+      // Only push a real street address; otherwise let the backend resolve the name.
+      if (geocoded && incId != null && !incId.startsWith('mock-')) {
+        SosApi.instance.updateSosLocation(
+          incId,
+          latitude: lat,
+          longitude: lng,
+          accuracy: _gpsAccuracy ?? 10.0,
+          locationName: resolvedAddress,
+        );
+      }
     }
   }
 
@@ -474,79 +800,7 @@ class _SOSScreenState extends State<SOSScreen> with TickerProviderStateMixin {
     }
   }
 
-  // Create a high-resolution emoji marker for the map
-  Future<BitmapDescriptor> _createEmojiMarker(String emoji) async {
-    const double size = 120;
-    final ui.PictureRecorder recorder = ui.PictureRecorder();
-    final Canvas canvas = Canvas(recorder);
-
-    // Draw a white circle background
-    final Paint bgPaint = Paint()..color = Colors.white;
-    canvas.drawCircle(const Offset(size / 2, size / 2), size / 2, bgPaint);
-
-    // Draw a subtle border
-    final Paint borderPaint = Paint()
-      ..color = Colors.grey.shade300
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = 3;
-    canvas.drawCircle(
-      const Offset(size / 2, size / 2),
-      size / 2 - 1.5,
-      borderPaint,
-    );
-
-    // Draw the emoji text
-    final textPainter = TextPainter(
-      text: TextSpan(text: emoji, style: const TextStyle(fontSize: 60)),
-      textDirection: TextDirection.ltr,
-    );
-    textPainter.layout();
-    textPainter.paint(
-      canvas,
-      Offset((size - textPainter.width) / 2, (size - textPainter.height) / 2),
-    );
-
-    final ui.Image image = await recorder.endRecording().toImage(
-      size.toInt(),
-      size.toInt(),
-    );
-    final data = await image.toByteData(format: ui.ImageByteFormat.png);
-    return BitmapDescriptor.bytes(data!.buffer.asUint8List());
-  }
-
-  // Get emoji and unit name for the selected emergency category
-  String _getResponderEmoji() {
-    switch (_selectedCategory.toLowerCase()) {
-      case 'medical aid':
-        return '🚑';
-      case 'fire rescue':
-        return '🚒';
-      case 'natural disaster':
-        return '🚁';
-      case 'police / threat':
-      default:
-        return '🚓';
-    }
-  }
-
-  String _getResponderUnitName() {
-    switch (_selectedCategory.toLowerCase()) {
-      case 'medical aid':
-        return 'Ambulance Unit 07';
-      case 'fire rescue':
-        return 'Fire Engine Unit 12';
-      case 'natural disaster':
-        return 'Rescue Helicopter H3';
-      case 'police / threat':
-      default:
-        return 'Police Rapid Response Unit 04';
-    }
-  }
-
-  void _startResponderSimulation() {
-    _simulationTimer?.cancel();
-
-    // Start the blinking red dot for the user's location
+  void _startLocationBlink() {
     _blinkTimer?.cancel();
     _blinkTimer = Timer.periodic(const Duration(milliseconds: 600), (timer) {
       if (mounted) {
@@ -557,101 +811,28 @@ class _SOSScreenState extends State<SOSScreen> with TickerProviderStateMixin {
         timer.cancel();
       }
     });
+  }
 
-    // Simulate a dispatcher assigning a unit after 5 seconds
-    Future.delayed(const Duration(seconds: 5), () async {
-      if (!mounted || !_isSOSActive) return;
-
-      // Generate the responder vehicle marker based on category
-      final icon = await _createEmojiMarker(_getResponderEmoji());
-
-      if (!mounted) return;
-      setState(() {
-        _isDispatched = true;
-        _responderName = _getResponderUnitName();
-        _responderIcon = icon;
-        // Start responder ~2km away diagonally
-        _responderLat = (_latitude ?? 5.6037) + 0.015;
-        _responderLng = (_longitude ?? -0.1870) + 0.015;
-      });
-
-      // Animate responder moving toward user every 3 seconds
-      _simulationTimer = Timer.periodic(const Duration(seconds: 3), (timer) {
-        if (!mounted ||
-            !_isSOSActive ||
-            _latitude == null ||
-            _longitude == null) {
-          timer.cancel();
-          return;
-        }
-
-        setState(() {
-          // Move responder 10% closer each tick
-          _responderLat = _responderLat! + (_latitude! - _responderLat!) * 0.1;
-          _responderLng = _responderLng! + (_longitude! - _responderLng!) * 0.1;
-
-          double dist = Geolocator.distanceBetween(
-            _latitude!,
-            _longitude!,
-            _responderLat!,
-            _responderLng!,
-          );
-          if (dist < 50) {
-            _responderETA = 'Arriving now';
-            timer.cancel();
-            // Auto-transition to recovery screen after 3 seconds
-            Future.delayed(const Duration(seconds: 3), () {
-              if (mounted && _isSOSActive) {
-                _stopSOS();
-              }
-            });
-          } else {
-            int mins = (dist / 400).ceil(); // Assuming ~24km/h speed
-            _responderETA = '~$mins mins';
-          }
-        });
-
-        _updateMapBounds();
-      });
+  /// Live SOS tracking: upgrades the location stream to an Android foreground
+  /// service so updates continue with the screen locked / app backgrounded.
+  /// Breadcrumbs are pushed from [_onLocationFix] -> [_pushLiveLocation].
+  void _startBackgroundTracking() {
+    _backgroundTrackingTimer?.cancel();
+    _backgroundTrackingTimer = null;
+    _trackingActive = true;
+    _loc.start(foreground: true).then((_) {
+      // A fix may have arrived while the SOS request was in flight.
+      final fix = _loc.latestFix.value;
+      if (fix != null && fix.source == FixSource.gps) _pushLiveLocation(fix);
     });
   }
 
-  void _startBackgroundTracking() {
-    _backgroundTrackingTimer?.cancel();
-    _backgroundTrackingTimer = Timer.periodic(const Duration(seconds: 15), (
-      timer,
-    ) async {
-      final incidentId = _activeIncidentId;
-      if (incidentId == null) return;
-
-      try {
-        final position = await Geolocator.getCurrentPosition(
-          desiredAccuracy: LocationAccuracy.high,
-          timeLimit: const Duration(seconds: 5),
-        );
-
-        setState(() {
-          _latitude = position.latitude;
-          _longitude = position.longitude;
-          _gpsAccuracy = position.accuracy;
-        });
-
-        if (!incidentId.startsWith('mock-')) {
-          await SosApi.instance.updateSosLocation(
-            incidentId,
-            latitude: position.latitude,
-            longitude: position.longitude,
-            accuracy: position.accuracy,
-          );
-        }
-
-        print(
-          'EAWS Telemetry background sync successful: ${position.latitude}, ${position.longitude}',
-        );
-      } catch (e) {
-        print('EAWS Telemetry background sync failed: $e');
-      }
-    });
+  /// Drops the foreground service but keeps the GPS warm for a quick re-trigger.
+  void _stopLiveTracking() {
+    _trackingActive = false;
+    _contactsFallbackTimer?.cancel();
+    _contactsFallbackTimer = null;
+    _loc.start(foreground: false);
   }
 
   void _startDispatchPolling() {
@@ -669,27 +850,132 @@ class _SOSScreenState extends State<SOSScreen> with TickerProviderStateMixin {
               details['incident_assignments'] as List? ??
               [];
           final responses = details['responses'] as List? ?? [];
+          final responder = details['responder'] as Map<String, dynamic>?;
 
-          if (assignments.isNotEmpty || responses.isNotEmpty) {
-            String unitCallsign = 'National Rapid Response Unit';
+          // 1. Extract Jurisdiction & Routing label
+          final routedLabel = details['routed_to_label']?.toString() ??
+              details['metadata']?['routed_to_label']?.toString();
+
+          // 2. Extract Status Events History
+          List<Map<String, dynamic>> parsedEvents = [];
+          if (details['status_events'] is List) {
+            parsedEvents = (details['status_events'] as List)
+                .map((e) => Map<String, dynamic>.from(e as Map))
+                .toList();
+          }
+
+          // 3. Extract Auto-Routed Target Agencies
+          final Set<String> targetAgencies = {};
+          for (final a in assignments) {
+            final ag = a['agency_type']?.toString();
+            if (ag != null && ag.isNotEmpty) targetAgencies.add(ag.toLowerCase());
+          }
+          if (targetAgencies.isEmpty) {
+            final cat = (details['category'] ?? details['emergency_type'] ?? _selectedCategory)
+                .toString()
+                .toLowerCase();
+            if (cat.contains('med') || cat.contains('health') || cat.contains('injur')) {
+              targetAgencies.add('ambulance');
+            } else if (cat.contains('fire') || cat.contains('gas') || cat.contains('burn')) {
+              targetAgencies.addAll(['fire', 'ambulance']);
+            } else if (cat.contains('flood') || cat.contains('disaster') || cat.contains('collapse')) {
+              targetAgencies.addAll(['nadmo', 'fire']);
+            } else {
+              targetAgencies.add('police');
+            }
+          }
+
+          // 4. Incident Status, Acknowledged, and En-Route checks
+          final incStatus = details['status']?.toString().toLowerCase() ?? 'pending';
+          final String firstAssignStatus = assignments.isNotEmpty
+              ? (assignments.first['status']?.toString().toLowerCase() ?? 'assigned')
+              : '';
+          final String respStatus = responder?['status']?.toString().toLowerCase() ?? '';
+          final bool isEnRouteStatus =
+              ['en_route', 'arrived', 'on_scene', 'transporting', 'in_progress', 'resolved']
+                  .contains(firstAssignStatus) ||
+              ['en_route', 'arrived', 'on_scene', 'transporting'].contains(respStatus) ||
+              ['in_progress', 'en_route', 'arrived', 'resolved'].contains(incStatus);
+          final bool ack = isEnRouteStatus ||
+              ['acknowledged', 'accepted'].contains(firstAssignStatus) ||
+              ['acknowledged', 'accepted'].contains(respStatus) ||
+              parsedEvents.any((e) =>
+                  e['to_status'] == 'acknowledged' ||
+                  e['to_status'] == 'accepted' ||
+                  e['to_status'] == 'en_route');
+
+          // 5. Responder Telemetry
+          double? nextRespLat = _responderLat;
+          double? nextRespLng = _responderLng;
+          String unitCallsign = _responderName.isNotEmpty ? _responderName : 'National Rapid Response Unit';
+          String? unitType = _responderUnitType;
+          String? unitStatus = _responderStatus;
+          String etaStr = _responderETA;
+          bool dispatched = isEnRouteStatus;
+
+          if (responder != null) {
+            final rLat = responder['lat'] != null ? (responder['lat'] as num).toDouble() : null;
+            final rLng = responder['lng'] != null ? (responder['lng'] as num).toDouble() : null;
+            if (rLat != null && rLng != null && (rLat != 0.0 || rLng != 0.0)) {
+              nextRespLat = rLat;
+              nextRespLng = rLng;
+            }
+            if (responder['unit_callsign'] != null) {
+              unitCallsign = responder['unit_callsign'].toString();
+            }
+            unitType = responder['unit_type']?.toString();
+            unitStatus = responder['status']?.toString();
+            final etaVal = responder['eta_minutes'] ?? details['eta_minutes'];
+            if (etaVal != null) {
+              final baseEta = etaVal is num ? etaVal.toDouble() : (double.tryParse(etaVal.toString()) ?? 5.0);
+              etaStr = '~${baseEta.round()} mins';
+            }
+          } else if (assignments.isNotEmpty || responses.isNotEmpty) {
             if (assignments.isNotEmpty) {
               final first = assignments.first;
               unitCallsign = first['unit_callsign']?.toString() ??
-                  first['agency_type']?.toString()?.toUpperCase() ??
+                  first['agency_type']?.toString().toUpperCase() ??
                   unitCallsign;
-            } else if (responses.isNotEmpty) {
-              final first = responses.first;
-              unitCallsign = first['agency']?.toString()?.toUpperCase() ?? unitCallsign;
-            }
-            setState(() {
-              _isDispatched = true;
-              _responderName = unitCallsign;
-              final eta = details['eta_minutes'] ??
-                  (assignments.isNotEmpty ? assignments.first['eta_minutes'] : null);
-              if (eta != null) {
-                _responderETA = '~$eta mins';
+              final etaVal = first['eta_minutes'] ?? details['eta_minutes'];
+              if (etaVal != null) {
+                final baseEta = etaVal is num ? etaVal.toDouble() : (double.tryParse(etaVal.toString()) ?? 6.0);
+                final assignedTimeStr = first['assigned_at'];
+                int remainingMinutes = baseEta.round();
+                if (assignedTimeStr != null) {
+                  final assignedDt = DateTime.tryParse(assignedTimeStr.toString());
+                  if (assignedDt != null) {
+                    final elapsedSecs = DateTime.now().difference(assignedDt).inSeconds;
+                    remainingMinutes = (baseEta - (elapsedSecs / 60)).round().clamp(1, 20);
+                  }
+                }
+                etaStr = '~$remainingMinutes mins';
               }
-            });
+            }
+          }
+
+          final bool coordsUpdated = nextRespLat != null &&
+              nextRespLng != null &&
+              (nextRespLat != _responderLat || nextRespLng != _responderLng);
+
+          setState(() {
+            if (routedLabel != null && routedLabel.isNotEmpty) {
+              _routedToLabel = routedLabel;
+            }
+            _statusEvents = parsedEvents;
+            _routedAgencies = targetAgencies.toList();
+            _incidentStatus = incStatus;
+            _isAcknowledged = ack;
+            _isDispatched = dispatched;
+            _responderName = unitCallsign;
+            _responderUnitType = unitType;
+            _responderStatus = unitStatus;
+            _responderETA = etaStr;
+            _responderLat = nextRespLat;
+            _responderLng = nextRespLng;
+          });
+
+          if (coordsUpdated) {
+            _updateMapBounds();
           }
         }
       } catch (e) {
@@ -705,6 +991,7 @@ class _SOSScreenState extends State<SOSScreen> with TickerProviderStateMixin {
     _dispatchPollingTimer?.cancel();
     _dispatchPollingTimer = null;
     _blinkTimer?.cancel();
+    _stopLiveTracking();
     final incidentId = _activeIncidentId;
     setState(() {
       _isSOSActive = false;
@@ -713,6 +1000,16 @@ class _SOSScreenState extends State<SOSScreen> with TickerProviderStateMixin {
       _showRecoveryScreen = true;
       _isSilentModeUnlocked = false;
       _enteredPin = '';
+      _routedToLabel = '';
+      _statusEvents = [];
+      _routedAgencies = [];
+      _responderStatus = null;
+      _responderUnitType = null;
+      _incidentStatus = null;
+      _isAcknowledged = false;
+      _isDispatched = false;
+      _responderLat = null;
+      _responderLng = null;
     });
     globalSosActiveNotifier.value = true;
 
@@ -796,6 +1093,10 @@ class _SOSScreenState extends State<SOSScreen> with TickerProviderStateMixin {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
+              // ── 0. GPS readiness (can responders find me?) ───────────────────
+              _buildGpsStatusChip(),
+              const SizedBox(height: 16),
+
               // ── 1. Readiness Score Card (interactive) ─────────────────────
               GestureDetector(
                 onTap: () {
@@ -831,7 +1132,7 @@ class _SOSScreenState extends State<SOSScreen> with TickerProviderStateMixin {
                           ),
                           const SizedBox(height: 20),
                           _buildReadinessCheckItem(
-                            true,
+                            _gpsReadiness == GpsReadiness.ready,
                             'GPS & Location Enabled',
                             '+30%',
                           ),
@@ -1143,14 +1444,14 @@ class _SOSScreenState extends State<SOSScreen> with TickerProviderStateMixin {
                                   vertical: 5,
                                 ),
                                 decoration: BoxDecoration(
-                                  color: (item['statusColor'] as Color)
+                                  color: (item['statusColor'] is Color ? (item['statusColor'] as Color) : (item['statusColor'] is int ? Color(item['statusColor'] as int) : const Color(0xFFF59E0B)))
                                       .withOpacity(0.1),
                                   borderRadius: BorderRadius.circular(10),
                                 ),
                                 child: Text(
                                   item['status'],
                                   style: TextStyle(
-                                    color: item['statusColor'],
+                                    color: (item['statusColor'] is Color ? (item['statusColor'] as Color) : (item['statusColor'] is int ? Color(item['statusColor'] as int) : const Color(0xFFF59E0B))),
                                     fontWeight: FontWeight.bold,
                                     fontSize: 11,
                                   ),
@@ -1636,7 +1937,9 @@ class _SOSScreenState extends State<SOSScreen> with TickerProviderStateMixin {
                       height: 1.4,
                     ),
                   ),
-                  const SizedBox(height: 48),
+                  const SizedBox(height: 16),
+                  _buildGpsStatusChip(onDark: true),
+                  const SizedBox(height: 32),
 
                   // Giant Animated Countdown Circle
                   Stack(
@@ -2091,9 +2394,9 @@ class _SOSScreenState extends State<SOSScreen> with TickerProviderStateMixin {
                           ],
                         ),
                         const SizedBox(height: 32),
-                        const Text(
-                          'HELP IS ON THE WAY',
-                          style: TextStyle(
+                        Text(
+                          _isDispatched ? 'HELP IS ON THE WAY' : 'SOS BROADCAST ACTIVE',
+                          style: const TextStyle(
                             color: Colors.white,
                             fontWeight: FontWeight.bold,
                             fontSize: 24,
@@ -2105,8 +2408,14 @@ class _SOSScreenState extends State<SOSScreen> with TickerProviderStateMixin {
                           padding: const EdgeInsets.symmetric(horizontal: 24.0),
                           child: Text(
                             _activeIncidentId != null
-                                ? 'Location: $_address\nCoordinates and live telemetry are transmitting to Control Room.'
-                                : 'GPS: ${_latitude?.toStringAsFixed(5) ?? '--'}, ${_longitude?.toStringAsFixed(5) ?? '--'}\nRead coordinates to operator if calling 112.',
+                                ? (_isDispatched
+                                    ? 'Location: $_address\n$_responderName is navigating to your position.'
+                                    : _locationPending
+                                        ? 'Exact location pending — acquiring GPS.\n112 Command Centre has your alert and may call you to locate you.'
+                                        : 'Location: $_address\n${_routedToLabel.isNotEmpty ? 'Routed to $_routedToLabel. ' : ''}Allocating the nearest responders.')
+                                : (_latitude != null && _longitude != null
+                                    ? 'GPS: ${_latitude!.toStringAsFixed(5)}, ${_longitude!.toStringAsFixed(5)}\nRead coordinates to operator if calling 112.'
+                                    : 'GPS not yet available.\nTell the 112 operator a nearby landmark.'),
                             textAlign: TextAlign.center,
                             style: const TextStyle(
                               color: Colors.white70,
@@ -2192,287 +2501,301 @@ class _SOSScreenState extends State<SOSScreen> with TickerProviderStateMixin {
                   left: 0,
                   right: 0,
                   child: Container(
+                    constraints: BoxConstraints(
+                      maxHeight: MediaQuery.of(context).size.height * 0.65,
+                    ),
                     padding: EdgeInsets.only(
-                      top: 24,
-                      left: 24,
-                      right: 24,
-                      bottom: MediaQuery.of(context).padding.bottom + 24,
+                      top: 20,
+                      left: 20,
+                      right: 20,
+                      bottom: MediaQuery.of(context).padding.bottom + 16,
                     ),
                     decoration: BoxDecoration(
                       color: showMap ? Colors.white : Colors.transparent,
                       borderRadius: showMap
                           ? const BorderRadius.vertical(
-                              top: Radius.circular(32),
+                              top: Radius.circular(28),
                             )
                           : null,
                       boxShadow: showMap
                           ? [
                               BoxShadow(
-                                color: Colors.black.withOpacity(0.1),
+                                color: Colors.black.withOpacity(0.12),
                                 blurRadius: 20,
-                                offset: const Offset(0, -5),
+                                offset: const Offset(0, -6),
                               ),
                             ]
                           : null,
                     ),
-                    child: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        // Simulated Live Response Dispatch Card or Offline Notice
-                        if (_activeIncidentId != null)
-                          Container(
-                            padding: const EdgeInsets.all(20),
-                            decoration: BoxDecoration(
-                              color: showMap
-                                  ? const Color(0xFFF8FAFC)
-                                  : Colors.white,
-                              borderRadius: BorderRadius.circular(16),
-                              border: showMap
-                                  ? Border.all(color: const Color(0xFFE2E8F0))
-                                  : null,
-                            ),
-                            child: Column(
-                              children: [
-                                Row(
-                                  children: [
-                                    Container(
-                                      padding: const EdgeInsets.all(8),
-                                      decoration: BoxDecoration(
-                                        color: AppTheme.successColor
-                                            .withOpacity(0.1),
-                                        shape: BoxShape.circle,
-                                      ),
-                                      child: const Icon(
-                                        LucideIcons.shieldCheck,
-                                        color: AppTheme.successColor,
-                                      ),
-                                    ),
-                                    const SizedBox(width: 12),
-                                    Expanded(
-                                      child: Column(
-                                        crossAxisAlignment:
-                                            CrossAxisAlignment.start,
-                                        children: [
-                                          const Text(
-                                            'Dispatch Unit Dispatched',
-                                            style: TextStyle(
-                                              fontWeight: FontWeight.bold,
-                                              color: AppTheme.textPrimary,
-                                            ),
-                                          ),
-                                          const SizedBox(height: 2),
-                                          Text(
-                                            '$_responderName is en-route',
-                                            style: const TextStyle(
-                                              fontSize: 12,
-                                              color: AppTheme.textSecondary,
-                                            ),
-                                          ),
-                                        ],
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                                const Divider(height: 24),
-                                Row(
-                                  mainAxisAlignment:
-                                      MainAxisAlignment.spaceBetween,
-                                  children: [
-                                    const Text(
-                                      'Estimated Arrival Time',
-                                      style: TextStyle(
-                                        color: AppTheme.textSecondary,
-                                      ),
-                                    ),
-                                    Text(
-                                      _responderETA,
-                                      style: const TextStyle(
-                                        fontWeight: FontWeight.bold,
-                                        color: AppTheme.errorColor,
-                                        fontSize: 16,
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                              ],
-                            ),
-                          )
-                        else
-                          Container(
-                            padding: const EdgeInsets.all(20),
-                            decoration: BoxDecoration(
-                              color: Colors.white,
-                              borderRadius: BorderRadius.circular(16),
-                            ),
-                            child: Column(
-                              children: [
-                                Row(
-                                  children: [
-                                    Container(
-                                      padding: const EdgeInsets.all(8),
-                                      decoration: BoxDecoration(
-                                        color: AppTheme.warningColor
-                                            .withOpacity(0.1),
-                                        shape: BoxShape.circle,
-                                      ),
-                                      child: const Icon(
-                                        LucideIcons.wifiOff,
-                                        color: AppTheme.warningColor,
-                                      ),
-                                    ),
-                                    const SizedBox(width: 12),
-                                    const Expanded(
-                                      child: Column(
-                                        crossAxisAlignment:
-                                            CrossAxisAlignment.start,
-                                        children: [
-                                          Text(
-                                            'Offline — SMS Fallback Active',
-                                            style: TextStyle(
-                                              fontWeight: FontWeight.bold,
-                                              color: AppTheme.textPrimary,
-                                            ),
-                                          ),
-                                          SizedBox(height: 2),
-                                          Text(
-                                            'Read coordinates to 112 operator:',
-                                            style: TextStyle(
-                                              fontSize: 12,
-                                              color: AppTheme.textSecondary,
-                                            ),
-                                          ),
-                                        ],
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                                const Divider(height: 20),
-                                Container(
-                                  width: double.infinity,
-                                  padding: const EdgeInsets.all(16),
-                                  decoration: BoxDecoration(
-                                    color: const Color(0xFF1E293B),
-                                    borderRadius: BorderRadius.circular(12),
-                                  ),
-                                  child: Column(
+                    child: SingleChildScrollView(
+                      physics: const BouncingScrollPhysics(),
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          if (_activeIncidentId != null) ...[
+                            // 1. Dynamic Jurisdiction & Auto-Routing Card (Sprint B)
+                            _buildJurisdictionRoutingCard(isLight: showMap),
+
+                            // 2. CAD Dispatch / Responder Telemetry Card (Sprint B & C)
+                            Container(
+                              padding: const EdgeInsets.all(16),
+                              decoration: BoxDecoration(
+                                color: showMap
+                                    ? const Color(0xFFF8FAFC)
+                                    : Colors.white,
+                                borderRadius: BorderRadius.circular(16),
+                                border: showMap
+                                    ? Border.all(color: const Color(0xFFE2E8F0))
+                                    : null,
+                              ),
+                              child: Column(
+                                children: [
+                                  Row(
                                     children: [
-                                      const Text(
-                                        'YOUR LOCATION',
-                                        style: TextStyle(
-                                          color: Colors.white60,
-                                          fontSize: 10,
-                                          letterSpacing: 1.5,
-                                          fontWeight: FontWeight.bold,
+                                      Container(
+                                        padding: const EdgeInsets.all(8),
+                                        decoration: BoxDecoration(
+                                          color: (_isDispatched ? AppTheme.successColor : const Color(0xFFF59E0B))
+                                              .withOpacity(0.12),
+                                          shape: BoxShape.circle,
+                                        ),
+                                        child: Icon(
+                                          _isDispatched ? LucideIcons.shieldCheck : LucideIcons.radio,
+                                          color: _isDispatched ? AppTheme.successColor : const Color(0xFFF59E0B),
+                                          size: 20,
                                         ),
                                       ),
-                                      const SizedBox(height: 8),
-                                      Text(
-                                        '${_latitude?.toStringAsFixed(5) ?? "--"}, ${_longitude?.toStringAsFixed(5) ?? "--"}',
-                                        style: const TextStyle(
-                                          color: Colors.white,
-                                          fontSize: 22,
-                                          fontWeight: FontWeight.bold,
-                                          letterSpacing: 1.2,
-                                        ),
-                                      ),
-                                      if (_gpsAccuracy != null)
-                                        Padding(
-                                          padding: const EdgeInsets.only(
-                                            top: 4,
-                                          ),
-                                          child: Text(
-                                            '±${_gpsAccuracy!.toStringAsFixed(1)}m accuracy',
-                                            style: const TextStyle(
-                                              color: Colors.white38,
-                                              fontSize: 11,
+                                      const SizedBox(width: 12),
+                                      Expanded(
+                                        child: Column(
+                                          crossAxisAlignment: CrossAxisAlignment.start,
+                                          children: [
+                                            Text(
+                                              _isDispatched
+                                                  ? 'Emergency Unit Dispatched'
+                                                  : (_isAcknowledged
+                                                      ? 'Officer Acknowledged Case'
+                                                      : (_incidentStatus == 'assigned'
+                                                          ? 'Unit Assigned — Awaiting Officer'
+                                                          : 'SOS Connected to Control Room')),
+                                              style: const TextStyle(
+                                                fontWeight: FontWeight.bold,
+                                                fontSize: 14,
+                                                color: AppTheme.textPrimary,
+                                              ),
                                             ),
-                                          ),
+                                            const SizedBox(height: 2),
+                                            Text(
+                                              _isDispatched
+                                                  ? '$_responderName is en-route${_responderUnitType != null ? " (${_responderUnitType!.replaceAll('_', ' ').toUpperCase()})" : ""}'
+                                                  : (_isAcknowledged
+                                                      ? '$_responderName acknowledged — preparing to depart'
+                                                      : (_incidentStatus == 'assigned'
+                                                          ? 'Assigned to $_responderName — waiting for officer to accept & depart'
+                                                          : '112 CAD is evaluating case and dispatching nearest sector unit...')),
+                                              style: const TextStyle(
+                                                fontSize: 12,
+                                                color: AppTheme.textSecondary,
+                                              ),
+                                            ),
+                                          ],
                                         ),
+                                      ),
                                     ],
                                   ),
-                                ),
-                              ],
-                            ),
-                          ),
-
-                        const SizedBox(height: 24),
-
-                        // Quick Action buttons inside SOS Active State
-                        Row(
-                          children: [
-                            Expanded(
-                              child: OutlinedButton.icon(
-                                onPressed: () async {
-                                  HapticFeedback.vibrate();
-                                  final Uri telUri = Uri.parse('tel:112');
-                                  if (await canLaunchUrl(telUri)) {
-                                    await launchUrl(telUri);
-                                  } else {
-                                    ScaffoldMessenger.of(context).showSnackBar(
-                                      const SnackBar(
-                                        content: Text(
-                                          'Could not launch phone dialer',
+                                  const Divider(height: 20),
+                                  Row(
+                                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                    children: [
+                                      Text(
+                                        _isDispatched ? 'Estimated Arrival Time' : 'Dispatch Assignment Status',
+                                        style: const TextStyle(
+                                          color: AppTheme.textSecondary,
+                                          fontSize: 12,
                                         ),
                                       ),
-                                    );
-                                  }
-                                },
-                                icon: Icon(
-                                  LucideIcons.phone,
-                                  color: showMap
-                                      ? AppTheme.primaryColor
-                                      : Colors.white,
-                                ),
-                                label: Text(
-                                  'CALL 112',
-                                  style: TextStyle(
-                                    color: showMap
-                                        ? AppTheme.primaryColor
-                                        : Colors.white,
+                                      Text(
+                                        _isDispatched
+                                            ? _responderETA
+                                            : (_isAcknowledged ? 'CAD Priority Queue' : 'Awaiting CAD Allocation'),
+                                        style: TextStyle(
+                                          fontWeight: FontWeight.bold,
+                                          color: _isDispatched ? AppTheme.errorColor : const Color(0xFFD97706),
+                                          fontSize: 14,
+                                        ),
+                                      ),
+                                    ],
                                   ),
-                                ),
-                                style: OutlinedButton.styleFrom(
-                                  padding: const EdgeInsets.symmetric(
-                                    vertical: 16,
-                                  ),
-                                  side: BorderSide(
-                                    color: showMap
-                                        ? AppTheme.primaryColor
-                                        : Colors.white,
-                                    width: 1.5,
-                                  ),
-                                  shape: RoundedRectangleBorder(
-                                    borderRadius: BorderRadius.circular(12),
-                                  ),
-                                ),
+                                ],
                               ),
                             ),
-                            const SizedBox(width: 16),
-                            Expanded(
-                              child: ElevatedButton.icon(
-                                onPressed: _stopSOS,
-                                icon: const Icon(LucideIcons.square),
-                                label: const Text('STOP SOS'),
-                                style: ElevatedButton.styleFrom(
-                                  backgroundColor: showMap
-                                      ? AppTheme.errorColor
-                                      : Colors.white,
-                                  foregroundColor: showMap
-                                      ? Colors.white
-                                      : AppTheme.errorColor,
-                                  padding: const EdgeInsets.symmetric(
-                                    vertical: 16,
+
+                            // 3. Live Dispatch Lifecycle Timeline Widget (Sprint C)
+                            _buildDispatchTimeline(isLight: showMap),
+                          ] else ...[
+                            // Offline SMS Fallback Card
+                            Container(
+                              padding: const EdgeInsets.all(20),
+                              decoration: BoxDecoration(
+                                color: Colors.white,
+                                borderRadius: BorderRadius.circular(16),
+                              ),
+                              child: Column(
+                                children: [
+                                  Row(
+                                    children: [
+                                      Container(
+                                        padding: const EdgeInsets.all(8),
+                                        decoration: BoxDecoration(
+                                          color: AppTheme.warningColor.withOpacity(0.1),
+                                          shape: BoxShape.circle,
+                                        ),
+                                        child: const Icon(
+                                          LucideIcons.wifiOff,
+                                          color: AppTheme.warningColor,
+                                        ),
+                                      ),
+                                      const SizedBox(width: 12),
+                                      const Expanded(
+                                        child: Column(
+                                          crossAxisAlignment: CrossAxisAlignment.start,
+                                          children: [
+                                            Text(
+                                              'Offline — SMS Fallback Active',
+                                              style: TextStyle(
+                                                fontWeight: FontWeight.bold,
+                                                color: AppTheme.textPrimary,
+                                              ),
+                                            ),
+                                            SizedBox(height: 2),
+                                            Text(
+                                              'Read coordinates to 112 operator:',
+                                              style: TextStyle(
+                                                fontSize: 12,
+                                                color: AppTheme.textSecondary,
+                                              ),
+                                            ),
+                                          ],
+                                        ),
+                                      ),
+                                    ],
                                   ),
-                                  shape: RoundedRectangleBorder(
-                                    borderRadius: BorderRadius.circular(12),
+                                  const Divider(height: 20),
+                                  Container(
+                                    width: double.infinity,
+                                    padding: const EdgeInsets.all(16),
+                                    decoration: BoxDecoration(
+                                      color: const Color(0xFF1E293B),
+                                      borderRadius: BorderRadius.circular(12),
+                                    ),
+                                    child: Column(
+                                      children: [
+                                        const Text(
+                                          'YOUR LOCATION',
+                                          style: TextStyle(
+                                            color: Colors.white60,
+                                            fontSize: 10,
+                                            letterSpacing: 1.5,
+                                            fontWeight: FontWeight.bold,
+                                          ),
+                                        ),
+                                        const SizedBox(height: 8),
+                                        Text(
+                                          '${_latitude?.toStringAsFixed(5) ?? "--"}, ${_longitude?.toStringAsFixed(5) ?? "--"}',
+                                          style: const TextStyle(
+                                            color: Colors.white,
+                                            fontSize: 22,
+                                            fontWeight: FontWeight.bold,
+                                            letterSpacing: 1.2,
+                                          ),
+                                        ),
+                                        if (_gpsAccuracy != null)
+                                          Padding(
+                                            padding: const EdgeInsets.only(top: 4),
+                                            child: Text(
+                                              '±${_gpsAccuracy!.toStringAsFixed(1)}m accuracy',
+                                              style: const TextStyle(
+                                                color: Colors.white38,
+                                                fontSize: 11,
+                                              ),
+                                            ),
+                                          ),
+                                      ],
+                                    ),
                                   ),
-                                  elevation: showMap ? 4 : 0,
-                                ),
+                                ],
                               ),
                             ),
                           ],
-                        ),
-                      ],
+
+                          const SizedBox(height: 16),
+
+                          if (_activeIncidentId != null) ...[
+                            WebRtcVoiceCallWidget(incidentId: _activeIncidentId!),
+                            const SizedBox(height: 10),
+                          ],
+
+                          // Quick Action buttons inside SOS Active State
+                          Row(
+                            children: [
+                              Expanded(
+                                child: OutlinedButton.icon(
+                                  onPressed: () async {
+                                    HapticFeedback.vibrate();
+                                    final Uri telUri = Uri.parse('tel:112');
+                                    if (await canLaunchUrl(telUri)) {
+                                      await launchUrl(telUri);
+                                    } else {
+                                      ScaffoldMessenger.of(context).showSnackBar(
+                                        const SnackBar(
+                                          content: Text('Could not launch phone dialer'),
+                                        ),
+                                      );
+                                    }
+                                  },
+                                  icon: Icon(
+                                    LucideIcons.phone,
+                                    color: showMap ? AppTheme.primaryColor : Colors.white,
+                                  ),
+                                  label: Text(
+                                    'CALL 112',
+                                    style: TextStyle(
+                                      color: showMap ? AppTheme.primaryColor : Colors.white,
+                                    ),
+                                  ),
+                                  style: OutlinedButton.styleFrom(
+                                    padding: const EdgeInsets.symmetric(vertical: 14),
+                                    side: BorderSide(
+                                      color: showMap ? AppTheme.primaryColor : Colors.white,
+                                      width: 1.5,
+                                    ),
+                                    shape: RoundedRectangleBorder(
+                                      borderRadius: BorderRadius.circular(12),
+                                    ),
+                                  ),
+                                ),
+                              ),
+                              const SizedBox(width: 16),
+                              Expanded(
+                                child: ElevatedButton.icon(
+                                  onPressed: _stopSOS,
+                                  icon: const Icon(LucideIcons.square),
+                                  label: const Text('STOP SOS'),
+                                  style: ElevatedButton.styleFrom(
+                                    backgroundColor: showMap ? AppTheme.errorColor : Colors.white,
+                                    foregroundColor: showMap ? Colors.white : AppTheme.errorColor,
+                                    padding: const EdgeInsets.symmetric(vertical: 14),
+                                    shape: RoundedRectangleBorder(
+                                      borderRadius: BorderRadius.circular(12),
+                                    ),
+                                    elevation: showMap ? 4 : 0,
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ],
+                      ),
                     ),
                   ),
                 ),
@@ -2481,6 +2804,402 @@ class _SOSScreenState extends State<SOSScreen> with TickerProviderStateMixin {
           ),
         );
       },
+    );
+  }
+
+  Widget _buildJurisdictionRoutingCard({required bool isLight}) {
+    final String label = _routedToLabel.isNotEmpty
+        ? _routedToLabel
+        : (_isAcknowledged ? 'Assigned Sector Command' : 'National 112 Command Centre');
+    final bool isSpecificStation = _routedToLabel.toLowerCase().contains('command') ||
+        _routedToLabel.toLowerCase().contains('metro') ||
+        _routedToLabel.toLowerCase().contains('station');
+
+    return Container(
+      margin: const EdgeInsets.only(bottom: 12),
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+      decoration: BoxDecoration(
+        color: isLight ? const Color(0xFFEFF6FF) : Colors.white.withOpacity(0.08),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(
+          color: isLight ? const Color(0xFFBFDBFE) : Colors.white24,
+          width: 1,
+        ),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(
+                isSpecificStation ? LucideIcons.mapPin : LucideIcons.globe,
+                size: 14,
+                color: isLight ? const Color(0xFF1D4ED8) : Colors.lightBlueAccent,
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  'ROUTED DISPATCH JURISDICTION',
+                  style: TextStyle(
+                    fontSize: 10,
+                    letterSpacing: 1.1,
+                    fontWeight: FontWeight.bold,
+                    color: isLight ? const Color(0xFF1E40AF) : Colors.white70,
+                  ),
+                ),
+              ),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                decoration: BoxDecoration(
+                  color: (_isAcknowledged ? AppTheme.successColor : const Color(0xFFD97706))
+                      .withOpacity(0.15),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Container(
+                      width: 6,
+                      height: 6,
+                      decoration: BoxDecoration(
+                        shape: BoxShape.circle,
+                        color: _isAcknowledged ? AppTheme.successColor : const Color(0xFFD97706),
+                      ),
+                    ),
+                    const SizedBox(width: 4),
+                    Text(
+                      _isAcknowledged ? 'ACKNOWLEDGED' : 'ROUTING',
+                      style: TextStyle(
+                        fontSize: 9,
+                        fontWeight: FontWeight.bold,
+                        color: _isAcknowledged ? AppTheme.successColor : const Color(0xFFD97706),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 6),
+          Text(
+            label,
+            style: TextStyle(
+              fontSize: 13,
+              fontWeight: FontWeight.bold,
+              color: isLight ? const Color(0xFF0F172A) : Colors.white,
+            ),
+          ),
+          if (_routedAgencies.isNotEmpty) ...[
+            const SizedBox(height: 8),
+            Wrap(
+              spacing: 6,
+              runSpacing: 4,
+              children: _routedAgencies
+                  .map((agency) => _buildAgencyChip(agency, isLight: isLight))
+                  .toList(),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
+  Widget _buildAgencyChip(String agency, {required bool isLight}) {
+    Color bg;
+    Color fg = Colors.white;
+    IconData icon;
+    String name;
+
+    switch (agency.toLowerCase()) {
+      case 'police':
+        bg = const Color(0xFF1E3A8A);
+        icon = LucideIcons.shield;
+        name = 'Ghana Police';
+        break;
+      case 'ambulance':
+        bg = const Color(0xFFDC2626);
+        icon = LucideIcons.heart;
+        name = 'Ambulance';
+        break;
+      case 'fire':
+        bg = const Color(0xFFEA580C);
+        icon = LucideIcons.flame;
+        name = 'Fire Service';
+        break;
+      case 'nadmo':
+        bg = const Color(0xFF047857);
+        icon = LucideIcons.alertTriangle;
+        name = 'NADMO Disaster';
+        break;
+      default:
+        bg = const Color(0xFF475569);
+        icon = LucideIcons.radio;
+        name = agency.toUpperCase();
+    }
+
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+      decoration: BoxDecoration(
+        color: bg,
+        borderRadius: BorderRadius.circular(6),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, size: 11, color: fg),
+          const SizedBox(width: 4),
+          Text(
+            name,
+            style: TextStyle(
+              color: fg,
+              fontSize: 10,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildDispatchTimeline({required bool isLight}) {
+    int currentStep = 0;
+    if (_activeIncidentId != null) currentStep = 1;
+    if (_routedToLabel.isNotEmpty) currentStep = 1;
+    if (_isAcknowledged) currentStep = 2;
+    if (_isDispatched) currentStep = 3;
+    if (_responderStatus == 'on_scene' || _incidentStatus == 'on_scene') currentStep = 4;
+
+    final steps = [
+      {
+        'title': 'Emergency SOS Broadcasted',
+        'subtitle': 'Live GPS telemetry received by CAD',
+        'icon': LucideIcons.radio,
+      },
+      {
+        'title': _routedToLabel.isNotEmpty
+            ? 'Routed to $_routedToLabel'
+            : 'Auto-Routing to Sector Command',
+        'subtitle': _routedAgencies.isNotEmpty
+            ? 'Auto-dispatched: ${_routedAgencies.map((a) => a.toUpperCase()).join(", ")}'
+            : 'Evaluating jurisdiction sector',
+        'icon': LucideIcons.mapPin,
+      },
+      {
+        'title': _isAcknowledged
+            ? 'Station Control Room Acknowledged'
+            : 'Awaiting Station Intake',
+        'subtitle': _isAcknowledged
+            ? 'Dispatcher confirmed emergency queue'
+            : 'Incident in active priority queue (< 60s SLA)',
+        'icon': LucideIcons.shieldCheck,
+      },
+      {
+        'title': _isDispatched
+            ? '$_responderName Dispatched'
+            : 'Unit Assignment in Progress',
+        'subtitle': _isDispatched
+            ? 'Navigating to your live location ($_responderETA)'
+            : 'CAD allocating closest sector unit',
+        'icon': LucideIcons.navigation,
+      },
+    ];
+
+    return Container(
+      margin: const EdgeInsets.only(top: 10),
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: isLight ? Colors.white : Colors.white.withOpacity(0.06),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(
+          color: isLight ? const Color(0xFFE2E8F0) : Colors.white12,
+        ),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Text(
+                'LIVE DISPATCH TIMELINE',
+                style: TextStyle(
+                  fontSize: 10,
+                  letterSpacing: 1.1,
+                  fontWeight: FontWeight.bold,
+                  color: isLight ? const Color(0xFF64748B) : Colors.white60,
+                ),
+              ),
+              InkWell(
+                onTap: () => setState(() => _showTimelineExpanded = !_showTimelineExpanded),
+                borderRadius: BorderRadius.circular(4),
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Text(
+                        _showTimelineExpanded ? 'Hide' : 'View steps',
+                        style: TextStyle(
+                          fontSize: 11,
+                          fontWeight: FontWeight.w600,
+                          color: isLight ? AppTheme.primaryColor : Colors.lightBlueAccent,
+                        ),
+                      ),
+                      Icon(
+                        _showTimelineExpanded ? LucideIcons.chevronUp : LucideIcons.chevronDown,
+                        size: 14,
+                        color: isLight ? AppTheme.primaryColor : Colors.lightBlueAccent,
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ],
+          ),
+          if (_showTimelineExpanded) ...[
+            const SizedBox(height: 10),
+            for (int i = 0; i < steps.length; i++) ...[
+              _buildTimelineStep(
+                stepIndex: i,
+                currentStep: currentStep,
+                title: steps[i]['title'] as String,
+                subtitle: steps[i]['subtitle'] as String,
+                icon: steps[i]['icon'] as IconData,
+                isLast: i == steps.length - 1 && _statusEvents.isEmpty,
+                isLight: isLight,
+              ),
+            ],
+            if (_statusEvents.isNotEmpty) ...[
+              const SizedBox(height: 8),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                decoration: BoxDecoration(
+                  color: isLight ? const Color(0xFFF1F5F9) : Colors.white.withOpacity(0.04),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Row(
+                  children: [
+                    Icon(
+                      LucideIcons.clock,
+                      size: 11,
+                      color: isLight ? const Color(0xFF64748B) : Colors.white60,
+                    ),
+                    const SizedBox(width: 6),
+                    Expanded(
+                      child: Text(
+                        'Audit Log: ${_statusEvents.last['actor_label'] ?? _statusEvents.last['notes'] ?? "Status updated"}',
+                        style: TextStyle(
+                          fontSize: 10,
+                          color: isLight ? const Color(0xFF475569) : Colors.white70,
+                        ),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ],
+        ],
+      ),
+    );
+  }
+
+  Widget _buildTimelineStep({
+    required int stepIndex,
+    required int currentStep,
+    required String title,
+    required String subtitle,
+    required IconData icon,
+    required bool isLast,
+    required bool isLight,
+  }) {
+    final bool isDone = stepIndex < currentStep;
+    final bool isCurrent = stepIndex == currentStep;
+
+    final Color dotColor = isDone
+        ? AppTheme.successColor
+        : (isCurrent ? const Color(0xFF2563EB) : (isLight ? const Color(0xFFCBD5E1) : Colors.white24));
+
+    final Color textColor = isDone || isCurrent
+        ? (isLight ? const Color(0xFF0F172A) : Colors.white)
+        : (isLight ? const Color(0xFF94A3B8) : Colors.white38);
+
+    return IntrinsicHeight(
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Column(
+            children: [
+              Container(
+                width: 20,
+                height: 20,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  color: isDone
+                      ? AppTheme.successColor
+                      : (isCurrent ? const Color(0xFF2563EB) : Colors.transparent),
+                  border: Border.all(
+                    color: dotColor,
+                    width: 2,
+                  ),
+                ),
+                child: Center(
+                  child: isDone
+                      ? const Icon(LucideIcons.checkCircle2, size: 12, color: Colors.white)
+                      : (isCurrent
+                          ? Container(
+                              width: 6,
+                              height: 6,
+                              decoration: const BoxDecoration(
+                                shape: BoxShape.circle,
+                                color: Colors.white,
+                              ),
+                            )
+                          : null),
+                ),
+              ),
+              if (!isLast)
+                Expanded(
+                  child: Container(
+                    width: 2,
+                    color: isDone
+                        ? AppTheme.successColor
+                        : (isLight ? const Color(0xFFE2E8F0) : Colors.white12),
+                  ),
+                ),
+            ],
+          ),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Padding(
+              padding: EdgeInsets.only(bottom: isLast ? 0 : 12),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    title,
+                    style: TextStyle(
+                      fontSize: 12,
+                      fontWeight: isCurrent ? FontWeight.bold : FontWeight.w600,
+                      color: textColor,
+                    ),
+                  ),
+                  const SizedBox(height: 1),
+                  Text(
+                    subtitle,
+                    style: TextStyle(
+                      fontSize: 10,
+                      color: isLight ? const Color(0xFF64748B) : Colors.white60,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ],
+      ),
     );
   }
 

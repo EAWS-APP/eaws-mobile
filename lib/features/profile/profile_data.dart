@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'package:eaws_app/core/supabase_mock.dart';
 import '../../core/user_session.dart';
 import '../../core/user_data_store.dart';
@@ -5,18 +6,19 @@ import '../../core/api_client.dart';
 
 class ProfileData {
   static String fullName = UserSession.instance.displayName;
-  static String email = UserSession.instance.email ?? 'kwame.asante@eaws.gov.gh';
-  static String phone = UserSession.instance.phone ?? '+233 26 123 4567';
-  static String dob = '15 Mar 1992';
+  static String email = UserSession.instance.email ?? '';
+  static String phone = UserSession.instance.phone ?? '';
+  static String dob = '';
   
-  static String bloodType = 'O+';
-  static String medicalConditions = 'None listed';
-  static String homeAddress = 'Accra, Ghana';
+  static String bloodType = '';
+  static String medicalConditions = '';
+  static String homeAddress = '';
   
   // Recommended premium emergency fields
-  static String allergies = 'None listed';
-  static String medications = 'None listed';
+  static String allergies = '';
+  static String medications = '';
   static String communicationPreference = 'Voice & Text';
+  static String avatarUrl = '';
 
   static String get initials {
     if (fullName.isEmpty) return 'KA';
@@ -47,6 +49,7 @@ class ProfileData {
       allergies = profile['allergies'] ?? allergies;
       medications = profile['medications'] ?? medications;
       communicationPreference = profile['communicationPreference'] ?? communicationPreference;
+      avatarUrl = profile['avatarUrl'] ?? avatarUrl;
 
       // 3. Sync with live Express backend GET /api/me
       try {
@@ -63,6 +66,7 @@ class ProfileData {
           allergies = remoteProfile['allergies'] ?? allergies;
           medications = remoteProfile['medications'] ?? medications;
           communicationPreference = remoteProfile['communication_preference'] ?? remoteProfile['communicationPreference'] ?? communicationPreference;
+          avatarUrl = remoteProfile['avatar_url'] ?? remoteProfile['avatarUrl'] ?? avatarUrl;
         }
       } catch (apiErr) {
         print('EAWS GET /me sync note: $apiErr');
@@ -95,6 +99,7 @@ class ProfileData {
         'allergies': allergies,
         'medications': medications,
         'communicationPreference': communicationPreference,
+        'avatarUrl': avatarUrl,
       });
 
       // Update UserSession
@@ -112,6 +117,7 @@ class ProfileData {
           'allergies': allergies,
           'medications': medications,
           'communication_preference': communicationPreference,
+          'avatar_url': avatarUrl,
         });
       } catch (patchErr) {
         print('EAWS saveToSession PATCH /me note: $patchErr');
@@ -132,6 +138,7 @@ class ProfileData {
               'allergies': allergies,
               'medications': medications,
               'communication_preference': communicationPreference,
+              'avatar_url': avatarUrl,
             },
           ),
         );
@@ -141,5 +148,36 @@ class ProfileData {
       print('EAWS Profile Save Error: $e');
       return false;
     }
+  }
+
+  /// Upload new avatar to backend and update profile
+  static Future<String?> uploadAvatar(dynamic fileOrBytes, {String? fileName}) async {
+    try {
+      String base64Content;
+      String name = fileName ?? 'avatar_${DateTime.now().millisecondsSinceEpoch}.jpg';
+      if (fileOrBytes is List<int>) {
+        base64Content = base64Encode(fileOrBytes);
+      } else {
+        final bytes = await fileOrBytes.readAsBytes();
+        base64Content = base64Encode(bytes);
+        try {
+          if (fileOrBytes.name != null) name = fileOrBytes.name;
+        } catch (_) {}
+      }
+
+      final res = await EawsApiClient.instance.post('/me/avatar', body: {
+        'file_name': name,
+        'file_base64': base64Content,
+      });
+
+      if (res != null && res['avatar_url'] != null) {
+        avatarUrl = res['avatar_url'].toString();
+        await saveToSession();
+        return avatarUrl;
+      }
+    } catch (e) {
+      print('EAWS uploadAvatar error: $e');
+    }
+    return null;
   }
 }

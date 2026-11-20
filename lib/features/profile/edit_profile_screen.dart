@@ -1,7 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:image_picker/image_picker.dart';
 import 'package:lucide_icons/lucide_icons.dart';
 import '../../core/theme.dart';
+import '../../core/api_client.dart';
 import 'profile_data.dart';
 
 class EditProfileScreen extends StatefulWidget {
@@ -13,6 +15,11 @@ class EditProfileScreen extends StatefulWidget {
 
 class _EditProfileScreenState extends State<EditProfileScreen> {
   final _formKey = GlobalKey<FormState>();
+
+  // Photo & Picker state
+  final ImagePicker _picker = ImagePicker();
+  XFile? _pickedAvatarFile;
+  Uint8List? _avatarBytes;
 
   // Text Controllers
   late TextEditingController _nameController;
@@ -67,6 +74,151 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
     super.dispose();
   }
 
+  Future<void> _pickPhoto(ImageSource source) async {
+    try {
+      final XFile? img = await _picker.pickImage(
+        source: source,
+        maxWidth: 800,
+        maxHeight: 800,
+        imageQuality: 85,
+      );
+      if (img != null) {
+        final bytes = await img.readAsBytes();
+        setState(() {
+          _pickedAvatarFile = img;
+          _avatarBytes = bytes;
+        });
+        // Upload immediately in background
+        ProfileData.uploadAvatar(img);
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Failed to pick photo: $e'), backgroundColor: AppTheme.errorColor),
+        );
+      }
+    }
+  }
+
+  void _showPhotoOptions() {
+    HapticFeedback.lightImpact();
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: Colors.white,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (ctx) => SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.symmetric(vertical: 12.0),
+          child: Wrap(
+            children: [
+              ListTile(
+                leading: const Icon(LucideIcons.camera, color: AppTheme.primaryColor),
+                title: const Text('Take a Photo', style: TextStyle(fontWeight: FontWeight.bold)),
+                onTap: () {
+                  Navigator.pop(ctx);
+                  _pickPhoto(ImageSource.camera);
+                },
+              ),
+              ListTile(
+                leading: const Icon(LucideIcons.image, color: AppTheme.primaryColor),
+                title: const Text('Choose from Gallery', style: TextStyle(fontWeight: FontWeight.bold)),
+                onTap: () {
+                  Navigator.pop(ctx);
+                  _pickPhoto(ImageSource.gallery);
+                },
+              ),
+              if (_avatarBytes != null || ProfileData.avatarUrl.isNotEmpty)
+                ListTile(
+                  leading: const Icon(LucideIcons.trash2, color: AppTheme.errorColor),
+                  title: const Text('Remove Photo', style: TextStyle(color: AppTheme.errorColor, fontWeight: FontWeight.bold)),
+                  onTap: () {
+                    Navigator.pop(ctx);
+                    setState(() {
+                      _pickedAvatarFile = null;
+                      _avatarBytes = null;
+                      ProfileData.avatarUrl = '';
+                    });
+                  },
+                ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Future<void> _pickDateOfBirth() async {
+    HapticFeedback.lightImpact();
+    final DateTime initial = DateTime(1995, 1, 1);
+    final DateTime? picked = await showDatePicker(
+      context: context,
+      initialDate: initial,
+      firstDate: DateTime(1920),
+      lastDate: DateTime.now(),
+      builder: (context, child) {
+        return Theme(
+          data: Theme.of(context).copyWith(
+            colorScheme: const ColorScheme.light(
+              primary: AppTheme.primaryColor,
+              onPrimary: Colors.white,
+              onSurface: AppTheme.textPrimary,
+            ),
+          ),
+          child: child!,
+        );
+      },
+    );
+    if (picked != null) {
+      const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+      setState(() {
+        _dobController.text = '${picked.day} ${months[picked.month - 1]} ${picked.year}';
+      });
+    }
+  }
+
+  Future<void> _pickBloodType() async {
+    HapticFeedback.lightImpact();
+    const types = ['A+', 'A-', 'B+', 'B-', 'AB+', 'AB-', 'O+', 'O-'];
+    final chosen = await showModalBottomSheet<String>(
+      context: context,
+      backgroundColor: Colors.white,
+      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
+      builder: (ctx) => Padding(
+        padding: const EdgeInsets.all(24.0),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text('Select Blood Type', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+            const SizedBox(height: 16),
+            Wrap(
+              spacing: 12,
+              runSpacing: 12,
+              children: types.map((t) {
+                final isSelected = _bloodController.text == t;
+                return ChoiceChip(
+                  label: Text(t, style: TextStyle(fontWeight: FontWeight.bold, color: isSelected ? Colors.white : AppTheme.textPrimary)),
+                  selected: isSelected,
+                  selectedColor: AppTheme.primaryColor,
+                  backgroundColor: Colors.grey.shade100,
+                  onSelected: (_) => Navigator.pop(ctx, t),
+                );
+              }).toList(),
+            ),
+            const SizedBox(height: 16),
+          ],
+        ),
+      ),
+    );
+    if (chosen != null) {
+      setState(() {
+        _bloodController.text = chosen;
+      });
+    }
+  }
+
   Future<void> _handleSave() async {
     if (!_formKey.currentState!.validate()) {
       HapticFeedback.vibrate();
@@ -76,6 +228,10 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
     setState(() {
       _isSaving = true;
     });
+
+    if (_pickedAvatarFile != null) {
+      await ProfileData.uploadAvatar(_pickedAvatarFile);
+    }
 
     // Save to local profile data holder
     ProfileData.fullName = _nameController.text.trim();
@@ -207,6 +363,9 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
                                   icon: LucideIcons.calendar,
                                   label: 'Date of Birth',
                                   controller: _dobController,
+                                  readOnly: true,
+                                  onTap: _pickDateOfBirth,
+                                  hintText: 'Tap to select Date of Birth',
                                 ),
                               ],
                             ),
@@ -236,42 +395,44 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
                                   icon: LucideIcons.droplet,
                                   label: 'Blood Type',
                                   controller: _bloodController,
-                                  hintText: 'e.g. O+, A-',
+                                  readOnly: true,
+                                  onTap: _pickBloodType,
+                                  hintText: 'Tap to select Blood Type (e.g. O+, A-)',
                                 ),
                                 const Divider(height: 1),
                                 _buildInputTile(
                                   icon: LucideIcons.heart,
                                   label: 'Medical Conditions',
                                   controller: _conditionsController,
-                                  hintText: 'e.g. Asthma, Diabetes',
+                                  hintText: 'e.g. Asthma, Hypertension, or None',
                                 ),
                                 const Divider(height: 1),
                                 _buildInputTile(
                                   icon: LucideIcons.mapPin,
                                   label: 'Home Address',
                                   controller: _addressController,
-                                  hintText: 'Enter home address',
+                                  hintText: 'Enter your residential address',
                                 ),
                                 const Divider(height: 1),
                                 _buildInputTile(
                                   icon: LucideIcons.alertOctagon,
                                   label: 'Allergies & Reactions',
                                   controller: _allergiesController,
-                                  hintText: 'e.g. Penicillin, Latex, Peanuts',
+                                  hintText: 'e.g. Penicillin, Latex, Peanuts, or None',
                                 ),
                                 const Divider(height: 1),
                                 _buildInputTile(
                                   icon: LucideIcons.pill,
                                   label: 'Current Medications',
                                   controller: _medicationsController,
-                                  hintText: 'e.g. Aspirin, Insulin',
+                                  hintText: 'e.g. Aspirin, Insulin, or None',
                                 ),
                                 const Divider(height: 1),
                                 _buildInputTile(
                                   icon: LucideIcons.phoneCall,
                                   label: 'Communication Preference',
                                   controller: _commPreferenceController,
-                                  hintText: 'e.g. Voice Call, Text Only',
+                                  hintText: 'e.g. Voice & Text, SMS Only',
                                 ),
                               ],
                             ),
@@ -385,33 +546,33 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
                     // Avatar stack
                     Stack(
                       children: [
-                        // White Initials Avatar
                         CircleAvatar(
                           radius: 46, // Extremely clean and compact
                           backgroundColor: Colors.white,
-                          child: Text(
-                            ProfileData.initials,
-                            style: const TextStyle(
-                              color: AppTheme.primaryColor,
-                              fontSize: 26,
-                              fontWeight: FontWeight.bold,
-                            ),
-                          ),
+                          backgroundImage: _avatarBytes != null
+                              ? MemoryImage(_avatarBytes!)
+                              : (ProfileData.avatarUrl.isNotEmpty
+                                  ? NetworkImage(ProfileData.avatarUrl.startsWith('http')
+                                      ? ProfileData.avatarUrl
+                                      : '${EawsApiClient.baseUrl.replaceAll('/api', '')}${ProfileData.avatarUrl}')
+                                  : null) as ImageProvider<Object>?,
+                          child: (_avatarBytes == null && ProfileData.avatarUrl.isEmpty)
+                              ? Text(
+                                  ProfileData.initials,
+                                  style: const TextStyle(
+                                    color: AppTheme.primaryColor,
+                                    fontSize: 26,
+                                    fontWeight: FontWeight.bold,
+                                  ),
+                                )
+                              : null,
                         ),
                         // Red Camera Overlay Edit Circle
                         Positioned(
                           bottom: 0,
                           right: 0,
                           child: GestureDetector(
-                            onTap: () {
-                              HapticFeedback.mediumImpact();
-                              ScaffoldMessenger.of(context).showSnackBar(
-                                const SnackBar(
-                                  content: Text('Triggering photo gallery access...'),
-                                  backgroundColor: AppTheme.primaryColor,
-                                ),
-                              );
-                            },
+                            onTap: _showPhotoOptions,
                             child: Container(
                               padding: const EdgeInsets.all(6),
                               decoration: BoxDecoration(
@@ -431,9 +592,7 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
                     ),
                     const SizedBox(height: 10),
                     GestureDetector(
-                      onTap: () {
-                        HapticFeedback.lightImpact();
-                      },
+                      onTap: _showPhotoOptions,
                       child: const Text(
                         'Change Photo',
                         style: TextStyle(
@@ -461,6 +620,8 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
     TextInputType keyboardType = TextInputType.text,
     FormFieldValidator<String>? validator,
     String? hintText,
+    bool readOnly = false,
+    VoidCallback? onTap,
   }) {
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 8.0),
@@ -495,6 +656,8 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
                   controller: controller,
                   keyboardType: keyboardType,
                   validator: validator,
+                  readOnly: readOnly,
+                  onTap: onTap,
                   style: const TextStyle(
                     fontSize: 14.5,
                     fontWeight: FontWeight.bold,

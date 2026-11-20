@@ -3,6 +3,8 @@ import 'dart:convert';
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:http/http.dart' as http;
+import '../../core/api_client.dart';
 import 'package:lucide_icons/lucide_icons.dart';
 import 'package:share_plus/share_plus.dart';
 import 'package:url_launcher/url_launcher.dart';
@@ -21,6 +23,7 @@ import 'models/alert_model.dart';
 import 'models/safe_zone_model.dart';
 import 'services/home_service.dart';
 import '../profile/messages_screen.dart';
+import '../../core/location_service.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -39,10 +42,10 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
   late AnimationController _pulseController;
 
   // Live System GPS Location State
-  String _currentLocationName = 'Accra, Ghana';
+  String _currentLocationName = 'Acquiring GPS location...';
   double _latitude = 5.6037;
   double _longitude = -0.1870;
-  double _accuracy = 3.0;
+  double _accuracy = 15.0;
   bool _locationLoaded = false;
 
   // Emergency Contacts state
@@ -96,6 +99,13 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
     _initLocationService();
     _loadAlertsAndZones();
     _loadDisplayName();
+
+    // Check if LocationService already has a fix
+    final initialFix = LocationService.instance.bestFix();
+    if (initialFix != null) {
+      _applyLocationFix(initialFix);
+    }
+    LocationService.instance.latestFix.addListener(_onLocationServiceFix);
   }
 
   void _initConnectivity() {
@@ -169,84 +179,48 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
     }
   }
 
+  void _onLocationServiceFix() {
+    final fix = LocationService.instance.latestFix.value;
+    if (fix != null && mounted) {
+      _applyLocationFix(fix);
+    }
+  }
+
+  void _applyLocationFix(LocationFix fix) {
+    setState(() {
+      _latitude = fix.latitude;
+      _longitude = fix.longitude;
+      _accuracy = fix.accuracy;
+      _locationLoaded = true;
+      if (_currentLocationName.contains('Acquiring') || _currentLocationName.contains('Locating')) {
+        _currentLocationName = '${_latitude.toStringAsFixed(4)}°, ${_longitude.toStringAsFixed(4)}°';
+      }
+    });
+    _updateNearestZone();
+    _fetchReverseGeocode(_latitude, _longitude);
+  }
+
   Future<void> _initLocationService() async {
     try {
-      bool serviceEnabled;
-      LocationPermission permission;
-
-      // Test if location services are enabled.
-      serviceEnabled = await Geolocator.isLocationServiceEnabled();
-      if (!serviceEnabled) {
-        setState(() {
-          _currentLocationName = 'Location services disabled';
-        });
-        return;
-      }
-
-      // Auto-request permission on first load (triggers native iOS dialog)
-      permission = await Geolocator.checkPermission();
-      if (permission == LocationPermission.denied) {
-        permission = await Geolocator.requestPermission();
-        if (permission == LocationPermission.denied) {
-          setState(() {
-            _currentLocationName = 'Location permission denied';
-          });
-          return;
+      await LocationService.instance.start(foreground: false);
+      final fix = await LocationService.instance.waitForFix(timeout: const Duration(seconds: 4));
+      if (fix != null && mounted) {
+        _applyLocationFix(fix);
+      } else {
+        final ready = await LocationService.instance.ensureReady(requestIfNeeded: true);
+        if (ready == GpsReadiness.serviceDisabled && mounted) {
+          setState(() => _currentLocationName = 'Location services disabled');
+        } else if ((ready == GpsReadiness.denied || ready == GpsReadiness.deniedForever) && mounted) {
+          setState(() => _currentLocationName = 'Location permission denied');
         }
       }
-      
-      // EAWS specific: escalate to background permissions for SOS tracking
-      if (permission == LocationPermission.whileInUse) {
-        final status = await Permission.locationAlways.request();
-        if (status.isGranted) {
-          print('EAWS: Successfully escalated to Background Location Always Allow');
-        }
-      }
-      
-      if (permission == LocationPermission.deniedForever) {
-        setState(() {
-          _currentLocationName = 'Location permission restricted';
-        });
-        return;
-      } 
-
-      // Retrieve high accuracy position with timeout and fallback
-      Position? position;
-      try {
-        position = await Geolocator.getCurrentPosition(
-          desiredAccuracy: LocationAccuracy.high,
-          timeLimit: const Duration(seconds: 6),
-        );
-      } catch (e) {
-        print('EAWS getCurrentPosition timeout, trying last known: $e');
-        position = await Geolocator.getLastKnownPosition();
-      }
-
-      if (position == null) {
-        setState(() {
-          _currentLocationName = 'Locating...';
-        });
-        return;
-      }
-
-      setState(() {
-        _latitude = position!.latitude;
-        _longitude = position.longitude;
-        _accuracy = position.accuracy;
-        _locationLoaded = true;
-        _currentLocationName = '${_latitude.toStringAsFixed(4)}\u00B0, ${_longitude.toStringAsFixed(4)}\u00B0';
-      });
-
-      // Recalculate nearest safe zone now that we have coordinates
-      _updateNearestZone();
-
-      // Query OpenStreetMap Nominatim reverse geocoding API to dynamically translate to city/country
-      await _fetchReverseGeocode(_latitude, _longitude);
     } catch (e) {
       print('EAWS Location Service Error: $e');
-      setState(() {
-        _currentLocationName = 'Location unavailable';
-      });
+      if (mounted) {
+        setState(() {
+          _currentLocationName = 'Location unavailable';
+        });
+      }
     }
   }
 
@@ -386,34 +360,26 @@ class _HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
 
   Future<void> _fetchReverseGeocode(double lat, double lon) async {
     try {
-      final client = HttpClient();
-      client.userAgent = 'EAWS_App/1.0';
-      final request = await client.getUrl(
-        Uri.parse('https://nominatim.openstreetmap.org/reverse?format=json&lat=$lat&lon=$lon'),
-      );
-      final response = await request.close();
+      final response = await http
+          .get(Uri.parse('${EawsApiClient.baseUrl}/geocode/reverse?lat=$lat&lng=$lon'))
+          .timeout(const Duration(seconds: 6));
       if (response.statusCode == 200) {
-        final content = await response.transform(utf8.decoder).join();
-        final data = json.decode(content);
-        final address = data['address'];
-        if (address != null) {
-          final String city = address['city'] ?? address['town'] ?? address['village'] ?? address['suburb'] ?? address['state'] ?? '';
-          final String country = address['country'] ?? '';
-          final String name = city.isNotEmpty ? '$city, $country' : country;
-          if (name.isNotEmpty) {
-            setState(() {
-              _currentLocationName = name;
-            });
-          }
+        final data = json.decode(response.body);
+        final String? areaName = data['area_name'];
+        if (areaName != null && areaName.isNotEmpty && mounted) {
+          setState(() {
+            _currentLocationName = areaName;
+          });
         }
       }
     } catch (e) {
-      print('EAWS Geocoding Error: $e');
+      debugPrint('EAWS Geocoding Error: $e');
     }
   }
 
   @override
   void dispose() {
+    LocationService.instance.latestFix.removeListener(_onLocationServiceFix);
     _sosHoldController.dispose();
     _pulseController.dispose();
     _vibrationTimer?.cancel();

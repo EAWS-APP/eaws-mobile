@@ -757,11 +757,11 @@ class _CommunityFeedScreenState extends State<CommunityFeedScreen> {
                   CircleAvatar(
                     radius: 20,
                     backgroundColor:
-                        (report['avatarColor'] as Color).withValues(alpha: 0.15),
+                        (report['avatarColor'] is Color ? report['avatarColor'] as Color : (report['avatarColor'] is int ? Color(report['avatarColor'] as int) : AppTheme.primaryColor)).withValues(alpha: 0.15),
                     child: Text(
                       report['initials'],
                       style: TextStyle(
-                        color: report['avatarColor'] as Color,
+                        color: (report['avatarColor'] is Color ? report['avatarColor'] as Color : (report['avatarColor'] is int ? Color(report['avatarColor'] as int) : AppTheme.primaryColor)),
                         fontWeight: FontWeight.bold,
                         fontSize: 13,
                       ),
@@ -980,7 +980,7 @@ class _CommunityFeedScreenState extends State<CommunityFeedScreen> {
                             child: Text(
                               report['initials'],
                               style: TextStyle(
-                                color: report['avatarColor'] as Color,
+                                color: (report['avatarColor'] is Color ? report['avatarColor'] as Color : (report['avatarColor'] is int ? Color(report['avatarColor'] as int) : AppTheme.primaryColor)),
                                 fontWeight: FontWeight.bold,
                                 fontSize: 13,
                               ),

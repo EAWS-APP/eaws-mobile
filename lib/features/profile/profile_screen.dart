@@ -10,6 +10,9 @@ import '../auth/login_screen.dart';
 import 'profile_data.dart';
 import 'edit_profile_screen.dart';
 import 'messages_screen.dart';
+import '../responder/responder_screen.dart';
+import '../../core/notification_service.dart';
+
 
 class ProfileScreen extends StatefulWidget {
   const ProfileScreen({super.key});
@@ -351,6 +354,317 @@ class _ProfileScreenState extends State<ProfileScreen> {
                         ),
                         const SizedBox(height: 24),
 
+                        // FIELD OPERATIONS SECTION (Sprint D)
+                        const Text(
+                          'FIELD OPERATIONS',
+                          style: TextStyle(
+                            fontSize: 12,
+                            fontWeight: FontWeight.bold,
+                            color: AppTheme.textSecondary,
+                            letterSpacing: 1.1,
+                          ),
+                        ),
+                        const SizedBox(height: 10),
+                        Container(
+                          decoration: BoxDecoration(
+                            gradient: const LinearGradient(
+                              colors: [Color(0xFF0F172A), Color(0xFF1E293B)],
+                              begin: Alignment.topLeft,
+                              end: Alignment.bottomRight,
+                            ),
+                            borderRadius: BorderRadius.circular(20),
+                            border: Border.all(color: const Color(0xFF2563EB), width: 1.5),
+                            boxShadow: [
+                              BoxShadow(
+                                color: const Color(0xFF2563EB).withOpacity(0.12),
+                                blurRadius: 10,
+                                offset: const Offset(0, 4),
+                              ),
+                            ],
+                          ),
+                          child: Material(
+                            color: Colors.transparent,
+                            child: InkWell(
+                              borderRadius: BorderRadius.circular(20),
+                              onTap: () {
+                                HapticFeedback.heavyImpact();
+                                Navigator.push(
+                                  context,
+                                  MaterialPageRoute(
+                                    builder: (_) => const ResponderScreen(),
+                                  ),
+                                );
+                              },
+                              child: Padding(
+                                padding: const EdgeInsets.all(18),
+                                child: Row(
+                                  children: [
+                                    Container(
+                                      padding: const EdgeInsets.all(10),
+                                      decoration: BoxDecoration(
+                                        color: const Color(0xFF2563EB).withOpacity(0.25),
+                                        shape: BoxShape.circle,
+                                        border: Border.all(color: const Color(0xFF38BDF8), width: 1.2),
+                                      ),
+                                      child: const Icon(
+                                        LucideIcons.shieldCheck,
+                                        color: Color(0xFF38BDF8),
+                                        size: 24,
+                                      ),
+                                    ),
+                                    const SizedBox(width: 14),
+                                    Expanded(
+                                      child: Column(
+                                        crossAxisAlignment: CrossAxisAlignment.start,
+                                        children: [
+                                          Row(
+                                            children: [
+                                              const Text(
+                                                'Responder Mode',
+                                                style: TextStyle(
+                                                  color: Colors.white,
+                                                  fontWeight: FontWeight.bold,
+                                                  fontSize: 16,
+                                                ),
+                                              ),
+                                              const SizedBox(width: 8),
+                                              Container(
+                                                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                                                decoration: const BoxDecoration(
+                                                  color: Color(0xFF059669),
+                                                  borderRadius: BorderRadius.all(Radius.circular(4)),
+                                                ),
+                                                child: const Text(
+                                                  'LIVE',
+                                                  style: TextStyle(
+                                                    color: Colors.white,
+                                                    fontSize: 9,
+                                                    fontWeight: FontWeight.bold,
+                                                  ),
+                                                ),
+                                              ),
+                                            ],
+                                          ),
+                                          const SizedBox(height: 3),
+                                          const Text(
+                                            'Field unit terminal: Accept CAD calls & stream GPS',
+                                            style: TextStyle(
+                                              color: Color(0xFF94A3B8),
+                                              fontSize: 12,
+                                            ),
+                                          ),
+                                        ],
+                                      ),
+                                    ),
+                                    const Icon(
+                                      LucideIcons.chevronRight,
+                                      color: Colors.white70,
+                                      size: 20,
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ),
+                          ),
+                        ),
+                        const SizedBox(height: 16),
+
+                        // CAD PUSH & REALTIME NOTIFICATIONS CARD (Sprint E)
+                        Container(
+                          decoration: BoxDecoration(
+                            gradient: const LinearGradient(
+                              colors: [Color(0xFF0F172A), Color(0xFF1E293B)],
+                              begin: Alignment.topLeft,
+                              end: Alignment.bottomRight,
+                            ),
+                            borderRadius: BorderRadius.circular(20),
+                            border: Border.all(color: const Color(0xFF334155), width: 1.5),
+                            boxShadow: [
+                              BoxShadow(
+                                color: Colors.black.withOpacity(0.08),
+                                blurRadius: 10,
+                                offset: const Offset(0, 4),
+                              ),
+                            ],
+                          ),
+                          child: Padding(
+                            padding: const EdgeInsets.all(16),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Row(
+                                  children: [
+                                    Container(
+                                      padding: const EdgeInsets.all(8),
+                                      decoration: BoxDecoration(
+                                        color: const Color(0xFF0284C7).withOpacity(0.2),
+                                        borderRadius: BorderRadius.circular(10),
+                                      ),
+                                      child: const Icon(
+                                        LucideIcons.bellRing,
+                                        color: Color(0xFF38BDF8),
+                                        size: 18,
+                                      ),
+                                    ),
+                                    const SizedBox(width: 10),
+                                    const Expanded(
+                                      child: Text(
+                                        'CAD Push & Realtime Engine',
+                                        style: TextStyle(
+                                          color: Colors.white,
+                                          fontWeight: FontWeight.bold,
+                                          fontSize: 14,
+                                        ),
+                                      ),
+                                    ),
+                                    Container(
+                                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                                      decoration: BoxDecoration(
+                                        color: NotificationService.instance.isRegistered
+                                            ? const Color(0xFF059669).withOpacity(0.2)
+                                            : const Color(0xFFD97706).withOpacity(0.2),
+                                        borderRadius: BorderRadius.circular(12),
+                                        border: Border.all(
+                                          color: NotificationService.instance.isRegistered
+                                              ? const Color(0xFF10B981)
+                                              : const Color(0xFFF59E0B),
+                                          width: 1,
+                                        ),
+                                      ),
+                                      child: Row(
+                                        mainAxisSize: MainAxisSize.min,
+                                        children: [
+                                          Container(
+                                            width: 6,
+                                            height: 6,
+                                            decoration: BoxDecoration(
+                                              shape: BoxShape.circle,
+                                              color: NotificationService.instance.isRegistered
+                                                  ? const Color(0xFF10B981)
+                                                  : const Color(0xFFF59E0B),
+                                            ),
+                                          ),
+                                          const SizedBox(width: 5),
+                                          Text(
+                                            NotificationService.instance.isRegistered ? 'REGISTERED' : 'SYNCED',
+                                            style: TextStyle(
+                                              color: NotificationService.instance.isRegistered
+                                                  ? const Color(0xFF34D399)
+                                                  : const Color(0xFFFBBF24),
+                                              fontSize: 10,
+                                              fontWeight: FontWeight.bold,
+                                            ),
+                                          ),
+                                        ],
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                                const SizedBox(height: 12),
+                                Container(
+                                  padding: const EdgeInsets.all(10),
+                                  decoration: BoxDecoration(
+                                    color: const Color(0xFF020617),
+                                    borderRadius: BorderRadius.circular(10),
+                                    border: Border.all(color: const Color(0xFF1E293B)),
+                                  ),
+                                  child: Row(
+                                    children: [
+                                      const Icon(LucideIcons.smartphone, color: Color(0xFF64748B), size: 14),
+                                      const SizedBox(width: 8),
+                                      Expanded(
+                                        child: Text(
+                                          NotificationService.instance.deviceToken ?? 'Generating token...',
+                                          style: const TextStyle(
+                                            color: Color(0xFF94A3B8),
+                                            fontSize: 11,
+                                            fontFamily: 'monospace',
+                                          ),
+                                          overflow: TextOverflow.ellipsis,
+                                        ),
+                                      ),
+                                      GestureDetector(
+                                        onTap: () {
+                                          final token = NotificationService.instance.deviceToken ?? '';
+                                          Clipboard.setData(ClipboardData(text: token));
+                                          ScaffoldMessenger.of(context).showSnackBar(
+                                            const SnackBar(
+                                              content: Text('Device push token copied to clipboard'),
+                                              duration: Duration(seconds: 2),
+                                            ),
+                                          );
+                                        },
+                                        child: const Padding(
+                                          padding: EdgeInsets.only(left: 6),
+                                          child: Icon(LucideIcons.copy, color: Color(0xFF38BDF8), size: 14),
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                                const SizedBox(height: 14),
+                                const Text(
+                                  'SIMULATE DISPATCH TRIGGERS (TESTING):',
+                                  style: TextStyle(
+                                    color: Color(0xFF64748B),
+                                    fontSize: 10,
+                                    fontWeight: FontWeight.bold,
+                                    letterSpacing: 0.8,
+                                  ),
+                                ),
+                                const SizedBox(height: 8),
+                                Row(
+                                  children: [
+                                    Expanded(
+                                      child: OutlinedButton(
+                                        onPressed: () {
+                                          NotificationService.instance.simulateIncomingDispatch(
+                                            agency: 'police',
+                                            callsign: 'POL-KMS-04',
+                                            incidentTitle: 'Armed Robbery at Adum',
+                                            location: 'Kumasi Metro',
+                                          );
+                                        },
+                                        style: OutlinedButton.styleFrom(
+                                          side: const BorderSide(color: Color(0xFF38BDF8), width: 1),
+                                          padding: const EdgeInsets.symmetric(vertical: 8),
+                                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                                        ),
+                                        child: const Text(
+                                          '🚨 Responder CAD',
+                                          style: TextStyle(color: Color(0xFF38BDF8), fontSize: 11, fontWeight: FontWeight.bold),
+                                        ),
+                                      ),
+                                    ),
+                                    const SizedBox(width: 8),
+                                    Expanded(
+                                      child: OutlinedButton(
+                                        onPressed: () {
+                                          NotificationService.instance.simulateCitizenStatusUpdate(
+                                            status: 'en_route',
+                                            callsign: 'AMB-KMS-02',
+                                            etaMinutes: 4,
+                                          );
+                                        },
+                                        style: OutlinedButton.styleFrom(
+                                          side: const BorderSide(color: Color(0xFFEF4444), width: 1),
+                                          padding: const EdgeInsets.symmetric(vertical: 8),
+                                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                                        ),
+                                        child: const Text(
+                                          '🚑 Citizen ETA',
+                                          style: TextStyle(color: Color(0xFFF87171), fontSize: 11, fontWeight: FontWeight.bold),
+                                        ),
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
+                        const SizedBox(height: 24),
+
                         // PREFERENCES SECTION
                         const Text(
                           'PREFERENCES',
@@ -554,14 +868,21 @@ class _ProfileScreenState extends State<ProfileScreen> {
                       CircleAvatar(
                         radius: 36, // Highly compact, neat aesthetic guidelines
                         backgroundColor: Colors.white,
-                        child: Text(
-                          ProfileData.initials,
-                          style: const TextStyle(
-                            color: AppTheme.primaryColor,
-                            fontSize: 20,
-                            fontWeight: FontWeight.bold,
-                          ),
-                        ),
+                        backgroundImage: ProfileData.avatarUrl.isNotEmpty
+                            ? NetworkImage(ProfileData.avatarUrl.startsWith('http')
+                                ? ProfileData.avatarUrl
+                                : '${EawsApiClient.baseUrl.replaceAll('/api', '')}${ProfileData.avatarUrl}')
+                            : null,
+                        child: ProfileData.avatarUrl.isEmpty
+                            ? Text(
+                                ProfileData.initials,
+                                style: const TextStyle(
+                                  color: AppTheme.primaryColor,
+                                  fontSize: 20,
+                                  fontWeight: FontWeight.bold,
+                                ),
+                              )
+                            : null,
                       ),
                       Positioned(
                         bottom: 0,

@@ -1,9 +1,11 @@
 import 'package:flutter/material.dart';
 import 'package:eaws_app/core/supabase_mock.dart';
 import 'core/theme.dart';
+import 'core/notification_service.dart';
 import 'features/auth/splash_screen.dart';
-
 import 'features/dashboard/dashboard_screen.dart';
+
+final GlobalKey<NavigatorState> appNavigatorKey = GlobalKey<NavigatorState>();
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -13,6 +15,9 @@ void main() async {
     url: 'https://sswwdizgwctfwirhmroj.supabase.co',
     anonKey: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InNzd3dkaXpnd2N0Zndpcmhtcm9qIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzY5NDg1MjcsImV4cCI6MjA5MjUyNDUyN30.QS9S21U3d2fX2OTvO79dPKxFryyolw3HonOaMecd-50',
   );
+
+  // Initialize Notification Service and hardware token registration
+  await NotificationService.instance.init(key: appNavigatorKey);
 
   runApp(const EAWSApp());
 }
@@ -25,6 +30,7 @@ class EAWSApp extends StatelessWidget {
     final session = Supabase.instance.client.auth.currentSession;
 
     return MaterialApp(
+      navigatorKey: appNavigatorKey,
       title: 'EAWS Citizen App',
       debugShowCheckedModeBanner: false,
       theme: AppTheme.lightTheme,
@@ -32,3 +38,4 @@ class EAWSApp extends StatelessWidget {
     );
   }
 }
+

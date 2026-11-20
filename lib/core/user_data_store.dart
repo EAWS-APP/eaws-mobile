@@ -41,19 +41,20 @@ class UserDataStore {
       }
     } catch (_) {}
 
-    // Default values if no profile stored yet for this user
+    // Clean initial values for newly registered users (no hardcoded placeholders)
     final session = UserSession.instance;
     return {
       'fullName': session.displayName,
-      'email': session.email ?? '${session.displayName.toLowerCase().replaceAll(' ', '.')}@eaws.gov.gh',
-      'phone': session.phone ?? '+233 26 123 4567',
-      'dob': '15 Mar 1992',
-      'bloodType': 'O+',
-      'medicalConditions': 'None listed',
-      'homeAddress': 'Accra, Ghana',
-      'allergies': 'None listed',
-      'medications': 'None listed',
+      'email': session.email ?? '',
+      'phone': session.phone ?? '',
+      'dob': '',
+      'bloodType': '',
+      'medicalConditions': '',
+      'homeAddress': '',
+      'allergies': '',
+      'medications': '',
       'communicationPreference': 'Voice & Text',
+      'avatarUrl': '',
     };
   }
 

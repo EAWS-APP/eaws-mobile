@@ -4,6 +4,7 @@ import '../../core/theme.dart';
 import '../../core/eaws_logo.dart';
 import '../../core/user_session.dart';
 import '../dashboard/dashboard_screen.dart';
+import 'package:image_picker/image_picker.dart';
 import 'register_screen.dart';
 import 'phone_login_screen.dart';
 import 'auth_service.dart';
@@ -70,6 +71,152 @@ class _LoginScreenState extends State<LoginScreen> {
       }
     } else {
       _showError('Invalid email or password. Please try again.');
+    }
+  }
+
+  Future<void> _handleFaceIdLogin() async {
+    try {
+      final picker = ImagePicker();
+      final XFile? photo = await picker.pickImage(
+        source: ImageSource.camera,
+        preferredCameraDevice: CameraDevice.front,
+      );
+
+      if (photo == null || !mounted) return;
+
+      // Show the Ghana Card suffix confirmation sheet
+      showModalBottomSheet(
+        context: context,
+        isScrollControlled: true,
+        backgroundColor: Colors.transparent,
+        builder: (context) {
+          final suffixController = TextEditingController();
+          bool isAuthenticating = false;
+
+          return StatefulBuilder(
+            builder: (context, setSheetState) {
+              return Padding(
+                padding: EdgeInsets.only(bottom: MediaQuery.of(context).viewInsets.bottom),
+                child: Container(
+                  padding: const EdgeInsets.all(24),
+                  decoration: const BoxDecoration(
+                    color: Colors.white,
+                    borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+                  ),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          Row(
+                            children: [
+                              Container(
+                                padding: const EdgeInsets.all(8),
+                                decoration: BoxDecoration(
+                                  color: AppTheme.primaryColor.withValues(alpha: 0.1),
+                                  borderRadius: BorderRadius.circular(8),
+                                ),
+                                child: const Icon(LucideIcons.scanFace, color: AppTheme.primaryColor),
+                              ),
+                              const SizedBox(width: 12),
+                              const Text(
+                                'Face ID Authentication',
+                                style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+                              ),
+                            ],
+                          ),
+                          IconButton(
+                            icon: const Icon(Icons.close),
+                            onPressed: () => Navigator.pop(context),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 8),
+                      const Text(
+                        'Live face captured. To confirm access, enter the last 3 characters of your registered Ghana Card PIN (e.g. 9-0 or 452).',
+                        style: TextStyle(fontSize: 13, color: AppTheme.textSecondary),
+                      ),
+                      const SizedBox(height: 16),
+                      TextField(
+                        controller: suffixController,
+                        textCapitalization: TextCapitalization.characters,
+                        decoration: InputDecoration(
+                          hintText: 'e.g. 9-0',
+                          prefixIcon: const Icon(LucideIcons.creditCard, color: AppTheme.textSecondary),
+                          border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
+                        ),
+                      ),
+                      const SizedBox(height: 20),
+                      SizedBox(
+                        width: double.infinity,
+                        child: ElevatedButton(
+                          onPressed: isAuthenticating
+                              ? null
+                              : () async {
+                                  final suffix = suffixController.text.trim();
+                                  if (suffix.length < 2) {
+                                    ScaffoldMessenger.of(context).showSnackBar(
+                                      const SnackBar(
+                                        content: Text('Please enter at least 2 or 3 characters of your Ghana Card PIN suffix.'),
+                                        backgroundColor: AppTheme.errorColor,
+                                      ),
+                                    );
+                                    return;
+                                  }
+
+                                  setSheetState(() => isAuthenticating = true);
+
+                                  final result = await AuthService.instance.verifyFaceId(
+                                    cardSuffix: suffix,
+                                  );
+
+                                  if (!context.mounted) return;
+                                  setSheetState(() => isAuthenticating = false);
+
+                                  if (result != null && result['success'] == true) {
+                                    Navigator.pop(context); // Close sheet
+                                    ScaffoldMessenger.of(context).showSnackBar(
+                                      const SnackBar(
+                                        content: Text('Biometric verification successful! Welcome back.'),
+                                        backgroundColor: AppTheme.successColor,
+                                      ),
+                                    );
+                                    Navigator.pushReplacement(
+                                      context,
+                                      MaterialPageRoute(builder: (context) => const DashboardScreen()),
+                                    );
+                                  } else {
+                                    ScaffoldMessenger.of(context).showSnackBar(
+                                      const SnackBar(
+                                        content: Text('Face ID and Ghana Card suffix could not be matched. Please check the 3 digits or use password login.'),
+                                        backgroundColor: AppTheme.errorColor,
+                                      ),
+                                    );
+                                  }
+                                },
+                          child: isAuthenticating
+                              ? const SizedBox(
+                                  height: 20,
+                                  width: 20,
+                                  child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2),
+                                )
+                              : const Text('Verify & Sign In'),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              );
+            },
+          );
+        },
+      );
+    } catch (e) {
+      if (mounted) {
+        _showError('Face capture error: $e');
+      }
     }
   }
 
@@ -366,6 +513,25 @@ class _LoginScreenState extends State<LoginScreen> {
                           style: OutlinedButton.styleFrom(
                             padding: const EdgeInsets.symmetric(vertical: 16),
                             side: const BorderSide(color: Color(0xFFE5E7EB)),
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(8),
+                            ),
+                          ),
+                        ),
+                      ),
+                      const SizedBox(height: 12),
+                      SizedBox(
+                        width: double.infinity,
+                        child: OutlinedButton.icon(
+                          onPressed: _handleFaceIdLogin,
+                          icon: const Icon(LucideIcons.scanFace, color: AppTheme.primaryColor),
+                          label: const Text(
+                            'Sign In with Face ID & Ghana Card',
+                            style: TextStyle(color: AppTheme.primaryColor, fontWeight: FontWeight.w600),
+                          ),
+                          style: OutlinedButton.styleFrom(
+                            padding: const EdgeInsets.symmetric(vertical: 16),
+                            side: const BorderSide(color: AppTheme.primaryColor),
                             shape: RoundedRectangleBorder(
                               borderRadius: BorderRadius.circular(8),
                             ),

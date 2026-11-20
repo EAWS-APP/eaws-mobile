@@ -1,5 +1,6 @@
 import 'dart:convert';
-import 'dart:io';
+import 'package:flutter/foundation.dart' show kIsWeb, defaultTargetPlatform, TargetPlatform;
+import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:eaws_app/core/supabase_mock.dart';
 
@@ -15,11 +16,16 @@ class EawsApiClient {
     if (customBaseUrl != null && customBaseUrl!.isNotEmpty) {
       return customBaseUrl!;
     }
-    try {
-      if (Platform.isAndroid) {
-        return 'http://10.0.2.2:5000/api';
+    if (kIsWeb) {
+      if (Uri.base.scheme == 'https') {
+        return '${Uri.base.origin}/api';
       }
-    } catch (_) {}
+      final host = Uri.base.host.isNotEmpty ? Uri.base.host : 'localhost';
+      return 'http://$host:5000/api';
+    }
+    if (defaultTargetPlatform == TargetPlatform.android) {
+      return 'http://10.0.2.2:5000/api';
+    }
     return 'http://localhost:5000/api';
   }
 
@@ -75,47 +81,41 @@ class EawsApiClient {
     final persistedToken = await getAuthToken();
 
     final uri = Uri.parse('$baseUrl$path').replace(queryParameters: query);
-    final client = HttpClient();
 
-    try {
-      final request = await client.openUrl(method, uri);
-      request.headers.set(HttpHeaders.acceptHeader, 'application/json');
-      request.headers.set(HttpHeaders.contentTypeHeader, 'application/json');
-
-      String token;
-      if (persistedToken != null && persistedToken.isNotEmpty && persistedToken != 'mock-token') {
-        token = persistedToken;
-      } else if (session?.accessToken != null && session!.accessToken != 'mock-token') {
-        token = session!.accessToken;
-      } else {
-        final userEmail = Supabase.instance.client.auth.currentUser?.email
-            ?? 'kwame@eaws.gov.gh';
-        token = 'mock-token-$userEmail';
-      }
-      request.headers.set(HttpHeaders.authorizationHeader, 'Bearer $token');
-
-      if (body != null) {
-        request.write(jsonEncode(body));
-      }
-
-      final response = await request.close();
-      final responseBody = await response.transform(utf8.decoder).join();
-
-      if (response.statusCode < 200 || response.statusCode >= 300) {
-        throw HttpException(
-          responseBody.isNotEmpty ? responseBody : 'EAWS API request failed ($method $path -> ${response.statusCode})',
-          uri: uri,
-        );
-      }
-
-      if (response.statusCode == 204 || responseBody.isEmpty) {
-        return null;
-      }
-
-      return jsonDecode(responseBody);
-    } finally {
-      client.close(force: true);
+    String token;
+    if (persistedToken != null && persistedToken.isNotEmpty && persistedToken != 'mock-token') {
+      token = persistedToken;
+    } else if (session?.accessToken != null && session!.accessToken != 'mock-token') {
+      token = session!.accessToken;
+    } else {
+      final userEmail = Supabase.instance.client.auth.currentUser?.email ?? 'kwame@eaws.gov.gh';
+      token = 'mock-token-$userEmail';
     }
+
+    final req = http.Request(method, uri);
+    req.headers['Accept'] = 'application/json';
+    req.headers['Content-Type'] = 'application/json';
+    req.headers['Authorization'] = 'Bearer $token';
+
+    if (body != null) {
+      req.body = jsonEncode(body);
+    }
+
+    final streamed = await req.send().timeout(const Duration(seconds: 15));
+    final response = await http.Response.fromStream(streamed);
+
+    if (response.statusCode < 200 || response.statusCode >= 300) {
+      throw Exception(
+        response.body.isNotEmpty
+            ? response.body
+            : 'EAWS API request failed ($method $path -> ${response.statusCode})',
+      );
+    }
+
+    if (response.statusCode == 204 || response.body.isEmpty) {
+      return null;
+    }
+
+    return jsonDecode(response.body);
   }
 }
-

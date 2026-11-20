@@ -4,31 +4,46 @@ class SosApi {
   SosApi._();
   static final SosApi instance = SosApi._();
 
+  /// Creates an SOS incident.
+  ///
+  /// [latitude]/[longitude] may be null when no trustworthy GPS fix exists yet;
+  /// the SOS is then sent with `location_status: 'pending'` (backend routes it
+  /// to the National 112 queue) and coordinates are PATCHed once a fix arrives.
+  /// Coordinates are NEVER fabricated.
   Future<Map<String, dynamic>> createSos({
-    required double latitude,
-    required double longitude,
-    required double accuracy,
+    required double? latitude,
+    required double? longitude,
+    required double? accuracy,
     required String locationName,
+    String locationSource = 'gps',
+    DateTime? locationFixAt,
     String? category,
     String? description,
   }) async {
+    final bool hasFix = latitude != null && longitude != null;
     try {
-      final payload = {
+      final payload = <String, dynamic>{
         'emergency_type': 'SOS',
         'category': category ?? 'SOS',
         'sos_type': category ?? 'general',
         'title': 'Emergency SOS',
         'description': description ?? 'Citizen triggered emergency SOS broadcast.',
-        'latitude': latitude,
-        'longitude': longitude,
         'location_name': locationName,
         'address': locationName,
+        'location_status': hasFix ? 'fixed' : 'pending',
+        'location_source': hasFix ? locationSource : 'none',
+        'accuracy_meters': hasFix ? accuracy : null,
+        'location_fix_at': hasFix ? (locationFixAt ?? DateTime.now()).toUtc().toIso8601String() : null,
         'metadata': {
-          'accuracy_meters': accuracy,
+          'accuracy_meters': hasFix ? accuracy : null,
           'platform': 'flutter_mobile',
-          'triggered_at': DateTime.now().toIso8601String(),
+          'triggered_at': DateTime.now().toUtc().toIso8601String(),
         },
       };
+      if (hasFix) {
+        payload['latitude'] = latitude;
+        payload['longitude'] = longitude;
+      }
 
       final res = await EawsApiClient.instance.post('/incidents/sos', body: payload);
       final incident = res['incident'] ?? res['sos_case'] ?? res;
@@ -46,21 +61,31 @@ class SosApi {
     }
   }
 
+  /// PATCHes a live GPS breadcrumb. Only real columns are sent (the backend
+  /// spreads the body into an UPDATE). Sending coordinates also upgrades a
+  /// 'pending' incident to 'fixed' and resolves its jurisdiction server-side.
   Future<void> updateSosLocation(
     String incidentId, {
     required double latitude,
     required double longitude,
     required double accuracy,
+    String? locationName,
   }) async {
     try {
       if (incidentId.startsWith('mock-')) return;
+      final Map<String, dynamic> body = {
+        'latitude': latitude,
+        'longitude': longitude,
+        'accuracy_meters': accuracy,
+        'location_status': 'fixed',
+      };
+      if (locationName != null && locationName.isNotEmpty) {
+        body['location_name'] = locationName;
+        body['address'] = locationName;
+      }
       await EawsApiClient.instance.patch(
         '/incidents/$incidentId',
-        body: {
-          'latitude': latitude,
-          'longitude': longitude,
-          'accuracy_meters': accuracy,
-        },
+        body: body,
       );
     } catch (e) {
       print('Failed to update SOS GPS breadcrumb: $e');
@@ -86,20 +111,24 @@ class SosApi {
   Future<void> notifyEmergencyContacts(
     String incidentId, {
     required List<Map<String, dynamic>> contacts,
-    required double latitude,
-    required double longitude,
+    required double? latitude,
+    required double? longitude,
     required String locationName,
   }) async {
     try {
       if (incidentId.startsWith('mock-')) return;
+      final body = <String, dynamic>{
+        'contacts': contacts,
+        'location_name': locationName,
+      };
+      // Omit (not null) so the backend doesn't build a "q=null,null" maps link.
+      if (latitude != null && longitude != null) {
+        body['latitude'] = latitude;
+        body['longitude'] = longitude;
+      }
       await EawsApiClient.instance.post(
         '/incidents/$incidentId/notify-contacts',
-        body: {
-          'contacts': contacts,
-          'latitude': latitude,
-          'longitude': longitude,
-          'location_name': locationName,
-        },
+        body: body,
       );
     } catch (e) {
       print('Failed to notify emergency contacts on backend: $e');

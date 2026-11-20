@@ -72,6 +72,11 @@
 	<string>EAWS requires continuous location access to monitor safe zones and automatically trigger immediate SOS rescue assistance in case of danger.</string>
 	<key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
 	<string>EAWS requires continuous location access to monitor safe zones and automatically trigger immediate SOS rescue assistance in case of danger.</string>
+	<key>NSLocationTemporaryUsageDescriptionDictionary</key>
+	<dict>
+		<key>EmergencySOS</key>
+		<string>Your precise location is needed so emergency responders can find you. Approximate location can be off by several kilometres.</string>
+	</dict>
 	<key>NSCameraUsageDescription</key>
 	<string>EAWS requires access to the camera to allow citizens to capture real-time photo evidence of active incidents.</string>
 	<key>NSMicrophoneUsageDescription</key>

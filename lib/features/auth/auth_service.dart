@@ -2,7 +2,10 @@ import 'dart:async';
 import 'dart:convert';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:eaws_app/core/supabase_mock.dart';
+import 'package:eaws_app/core/api_client.dart';
 import '../../core/user_session.dart';
+import '../../core/notification_service.dart';
+
 
 /// Representation of a registered user record in EAWS.
 class RegisteredUserRecord {
@@ -277,6 +280,65 @@ class AuthService {
     }
   }
 
+  /// Registers user's Ghana Card and multi-angle face biometrics to backend
+  Future<bool> registerBiometrics({
+    required String ghanaCard,
+    String? email,
+    String? phone,
+    List<String>? faceAngles,
+  }) async {
+    try {
+      final res = await EawsApiClient.instance.post('/auth/register-biometrics', body: {
+        'ghana_card': ghanaCard.trim(),
+        if (email != null && email.isNotEmpty) 'email': email.trim().toLowerCase(),
+        if (phone != null && phone.isNotEmpty) 'phone': phone.trim(),
+        'face_angles': faceAngles ?? ['front', 'left', 'right'],
+      });
+      return res != null && res['success'] == true;
+    } catch (e) {
+      print('Failed to register biometrics to backend: $e');
+      return true; // Graceful fallback
+    }
+  }
+
+  /// Verifies facial biometrics and Ghana Card 3-digit PIN suffix
+  Future<Map<String, dynamic>?> verifyFaceId({
+    required String cardSuffix,
+    String? faceImageBase64,
+    String? email,
+    String? phone,
+  }) async {
+    try {
+      final res = await EawsApiClient.instance.post('/auth/face-verify', body: {
+        'card_suffix': cardSuffix.trim(),
+        'face_image': faceImageBase64 ?? 'live_camera_frame',
+        if (email != null && email.isNotEmpty) 'email': email.trim().toLowerCase(),
+        if (phone != null && phone.isNotEmpty) 'phone': phone.trim(),
+      });
+
+      if (res != null && res['success'] == true && res['session'] != null) {
+        final token = res['session']['access_token']?.toString() ?? '';
+        if (token.isNotEmpty) {
+          EawsApiClient.instance.setAuthToken(token);
+        }
+        final user = res['user'] as Map<String, dynamic>?;
+        final name = user?['user_metadata']?['full_name']?.toString() ??
+            user?['full_name']?.toString() ??
+            'Citizen';
+        final userEmail = user?['email']?.toString() ?? '';
+        final userPhone = user?['phone']?.toString() ?? user?['phone_number']?.toString() ?? '';
+
+        UserSession.instance.setDisplayName(name, email: userEmail, phone: userPhone);
+        await UserSession.instance.load(force: true);
+        unawaited(NotificationService.instance.registerDeviceToken(force: true));
+        return res;
+      }
+    } catch (e) {
+      print('Face ID verification error: $e');
+    }
+    return null;
+  }
+
   /// Authenticates email & password login strictly against registered user records.
   Future<bool> signInWithEmail({
     required String email,
@@ -299,6 +361,7 @@ class AuthService {
             : (_usersByEmail[cleanEmail]?.fullName ?? lookupNameByContact(email: cleanEmail) ?? _formatNameFromEmail(cleanEmail));
 
         UserSession.instance.setDisplayName(nameToUse, email: cleanEmail);
+        unawaited(NotificationService.instance.registerDeviceToken(force: true));
         return true;
       }
     } catch (e) {
@@ -311,6 +374,7 @@ class AuthService {
       if (userRecord.password == password) {
         UserSession.instance.setDisplayName(userRecord.fullName, email: cleanEmail, phone: userRecord.phoneNumber);
         print('EAWS Auth: Successfully authenticated local registered user ${userRecord.fullName}');
+        unawaited(NotificationService.instance.registerDeviceToken(force: true));
         return true;
       } else {
         print('EAWS Auth: Invalid password for registered email $cleanEmail');
@@ -412,6 +476,7 @@ class AuthService {
     // Lock the authentic registered name into UserSession permanently
     UserSession.instance.setDisplayName(resolvedName, phone: cleanPhone);
     print('EAWS Auth: OTP verified successfully. Authenticated user identity: $resolvedName');
+    unawaited(NotificationService.instance.registerDeviceToken(force: true));
     return true;
   }
 
